@@ -25,14 +25,14 @@ from sklearn.metrics import f1_score, roc_auc_score
 from config import SEED
 from schema import normalize_sentinels, to_categorical, partition_columns, drop_all_nan_rows
 from feature_engineering import (
-    engineer_aa_features, engineer_interaction_features,
+    engineer_aa_features, engineer_acmg_features, engineer_interaction_features,
     fit_score_agreement, apply_score_agreement,
     fit_quadrants, apply_quadrants,
 )
 from calibration import fit_platt, apply_platt
 from utils import (
     detect_leaky_columns, optimize_threshold_f1, optimize_threshold_f1_balanced,
-    KNOWN_LEAKY, PANELS,
+    KNOWN_LEAKY, PANELS, TEST_PRIORS, ACMG_PANELS,
 )
 from run_pipeline import (
     preprocess_data, select_features_mrmr, get_model_params,
@@ -65,6 +65,8 @@ def train_and_save(panel_name):
     df = drop_all_nan_rows(df)
     df = to_categorical(df)
     df = engineer_aa_features(df)
+    if panel_name in ACMG_PANELS:
+        df = engineer_acmg_features(df)
     if cfg.get("use_interactions", True):
         df = engineer_interaction_features(df)
     _, num_cols, cat_cols, tgt = partition_columns(df)
@@ -131,17 +133,19 @@ def train_and_save(panel_name):
     print(f"  OOF: F1={f1_score(y_train_val, (oof_probs >= 0.5).astype(int)):.4f}, "
           f"AUC={roc_auc_score(y_train_val, oof_probs):.4f}")
 
-    # Calibration (Platt) is conditional per panel; balanced threshold always used.
+    # Calibration (Platt) is conditional per panel; test-prior threshold deployed.
+    # Test set is Benign-dominant (şartname v2.0); tune for the per-panel TEST prior.
+    panel_prior = TEST_PRIORS.get(panel_name, 0.5)
     platt_fitted = None
     f1_t_raw, f1_val_raw = optimize_threshold_f1(y_train_val, oof_probs)
     f1_t_bal, f1_val_bal, f1_std_bal = optimize_threshold_f1_balanced(
-        y_train_val.values, oof_probs, target_prior=0.5, n_bootstrap=200)
+        y_train_val.values, oof_probs, target_prior=panel_prior, n_bootstrap=200)
 
     if cfg.get("use_platt", True):
         platt_fitted = fit_platt(oof_probs, y_train_val.values)
         oof_calibrated = apply_platt(oof_probs, platt_fitted)
         f1_t_cal, f1_val_cal, f1_std_cal = optimize_threshold_f1_balanced(
-            y_train_val.values, oof_calibrated, target_prior=0.5, n_bootstrap=200)
+            y_train_val.values, oof_calibrated, target_prior=panel_prior, n_bootstrap=200)
         deployed_t = f1_t_cal
         deployed_f1 = f1_val_cal
     else:
@@ -150,9 +154,9 @@ def train_and_save(panel_name):
         deployed_f1 = f1_val_bal
 
     print(f"  Threshold (raw, training prior):     {f1_t_raw} (F1={f1_val_raw:.4f}, inflated)")
-    print(f"  Threshold (raw OOF, balanced prior): {f1_t_bal} (F1={f1_val_bal:.4f}±{f1_std_bal:.4f})")
+    print(f"  Threshold (raw OOF, test prior):     {f1_t_bal} (F1={f1_val_bal:.4f}±{f1_std_bal:.4f})")
     if platt_fitted:
-        print(f"  Threshold (Platt + balanced):        {f1_t_cal} (F1={f1_val_cal:.4f}±{f1_std_cal:.4f})  <- deployed")
+        print(f"  Threshold (Platt + test prior):      {f1_t_cal} (F1={f1_val_cal:.4f}±{f1_std_cal:.4f})  <- deployed")
     else:
         print(f"  Deployed = balanced threshold (no Platt for this panel)")
 
@@ -203,6 +207,7 @@ def apply_preprocessing(X, fitted):
     X = normalize_sentinels(X)
     X = to_categorical(X)
     X = engineer_aa_features(X)
+    X = engineer_acmg_features(X)
     X = engineer_interaction_features(X)  # safe even if not used at training — extra cols get dropped at reassembly
 
     # 2. Drop training-time constants

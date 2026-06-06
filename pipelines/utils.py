@@ -6,7 +6,7 @@ from typing import Dict, List, Tuple
 
 from sklearn.metrics import (
     f1_score, accuracy_score, roc_auc_score,
-    precision_score, recall_score, brier_score_loss
+    precision_score, recall_score, brier_score_loss, matthews_corrcoef
 )
 
 from config import BASE_DIR
@@ -22,6 +22,23 @@ PANELS = {
 # Competition has not released a test set; external-test branch in run_pipeline.py
 # stays inert as long as TEST_PANELS is empty.
 TEST_PANELS: dict = {}
+
+# Per-panel PATHOGENIC fraction of the *test* set, from şartname v2.0 §3.2
+# ("Klinik Stres Testi": training is Pathogenic-dominant, test is Benign-dominant).
+# Test counts (≈): general 500P/3000B, cancer 100P/500B, pah 100P/250B, cftr 20P/100B.
+# Used as target_prior for threshold selection so F1 is optimised for the
+# distribution we are actually scored on — NOT the training prior, NOT 50/50.
+TEST_PRIORS = {
+    "general": 500 / 3500,   # 0.143
+    "cancer":  100 / 600,    # 0.167
+    "pah":     100 / 350,    # 0.286
+    "cftr":     20 / 120,    # 0.167
+}
+
+# Panels where the ACMG allele-frequency feature (engineer_acmg_features) is enabled.
+# Empirically it helps only PAH (small, frequency-driven: F1 +0.044, AUC +0.017) and
+# is neutral/harmful elsewhere. Each panel is a separate model, so this is per-panel config.
+ACMG_PANELS = {"pah"}
 
 # Known leaky columns (will also be auto-detected)
 KNOWN_LEAKY = {'AF', 'nSNP', 'Pos1', 'Positions'}
@@ -133,8 +150,10 @@ def optimize_threshold_f1_balanced(
     Find the threshold that maximizes mean F1 on bootstraps resampled to target_prior.
 
     Use this instead of optimize_threshold_f1 when the training data has a
-    different class prior from the test data. For TEKNOFEST 2026 the rules
-    guarantee 50/50 test sets, so default target_prior=0.5.
+    different class prior from the test data. For TEKNOFEST 2026 v2.0 the test
+    sets are deliberately Benign-dominant ("Klinik Stres Testi"), so callers pass
+    the per-panel test prior from utils.TEST_PRIORS (NOT 0.5 — that was the stale
+    v1.x assumption). The 0.5 default is kept only as a safe fallback.
 
     Returns:
         threshold     : F1-optimal threshold under the target prior
@@ -181,6 +200,7 @@ def compute_metrics(y_true: pd.Series, probs: np.ndarray, threshold: float = 0.5
     return {
         "f1": round(f1_score(y_true, preds, zero_division=0), 4),
         "f1_macro": round(f1_score(y_true, preds, average='macro', zero_division=0), 4),
+        "mcc": round(matthews_corrcoef(y_true, preds), 4),
         "accuracy": round(accuracy_score(y_true, preds), 4),
         "roc_auc": round(roc_auc_score(y_true, probs), 4),
         "precision": round(precision_score(y_true, preds, zero_division=0), 4),
@@ -188,6 +208,29 @@ def compute_metrics(y_true: pd.Series, probs: np.ndarray, threshold: float = 0.5
         "brier": round(brier_score_loss(y_true, probs), 6),
         "threshold": threshold,
     }
+
+
+def mcc_at_prior(y_true, probs, threshold: float, target_prior: float = 0.5,
+                 n_bootstrap: int = 200, seed: int = 42) -> Tuple[float, float]:
+    """Mean Matthews correlation coefficient at a FIXED threshold, on bootstraps
+    resampled to target_prior. Reported alongside F1 (v2.0 §7.3 permits MCC, which
+    is more robust to the benign-dominant test imbalance). Returns (mean, std)."""
+    y_arr = np.asarray(y_true)
+    preds = (np.asarray(probs) >= threshold).astype(int)
+    pos_idx = np.where(y_arr == 1)[0]
+    neg_idx = np.where(y_arr == 0)[0]
+    if len(pos_idx) == 0 or len(neg_idx) == 0:
+        return 0.0, 0.0
+    n = len(y_arr)
+    n_pos = max(1, int(round(n * target_prior)))
+    n_neg = max(1, n - n_pos)
+    rng = np.random.RandomState(seed)
+    vals = []
+    for _ in range(n_bootstrap):
+        idx = np.concatenate([rng.choice(pos_idx, n_pos, replace=True),
+                              rng.choice(neg_idx, n_neg, replace=True)])
+        vals.append(matthews_corrcoef(y_arr[idx], preds[idx]))
+    return round(float(np.mean(vals)), 4), round(float(np.std(vals)), 4)
 
 
 # ── Subsampling ──────────────────────────────────────────────────

@@ -60,15 +60,15 @@ from schema import (
     CAT_CONSTANT, CAT_SPARSE,
 )
 from feature_engineering import (
-    engineer_aa_features, engineer_interaction_features,
+    engineer_aa_features, engineer_acmg_features, engineer_interaction_features,
     fit_score_agreement, apply_score_agreement,
     fit_quadrants, apply_quadrants,
 )
 from calibration import fit_platt, apply_platt, calibration_summary
 from utils import (
     detect_leaky_columns, compute_metrics,
-    optimize_threshold_f1, optimize_threshold_f1_balanced,
-    KNOWN_LEAKY, PANELS, TEST_PANELS,
+    optimize_threshold_f1, optimize_threshold_f1_balanced, mcc_at_prior,
+    KNOWN_LEAKY, PANELS, TEST_PANELS, TEST_PRIORS, ACMG_PANELS,
 )
 
 
@@ -558,6 +558,8 @@ def run_panel(panel_name: str,
     df_train = drop_all_nan_rows(df_train)
     df_train = to_categorical(df_train)
     df_train = engineer_aa_features(df_train)
+    if panel_name in ACMG_PANELS:
+        df_train = engineer_acmg_features(df_train)
     if use_interactions:
         df_train = engineer_interaction_features(df_train)
     has_ext = panel_name in TEST_PANELS and os.path.exists(TEST_PANELS.get(panel_name, ""))
@@ -567,6 +569,8 @@ def run_panel(panel_name: str,
         df_ext = drop_all_nan_rows(df_ext)
         df_ext = to_categorical(df_ext)
         df_ext = engineer_aa_features(df_ext)
+        if panel_name in ACMG_PANELS:
+            df_ext = engineer_acmg_features(df_ext)
         if use_interactions:
             df_ext = engineer_interaction_features(df_ext)
 
@@ -701,11 +705,16 @@ def run_panel(panel_name: str,
     # -- [8] Calibration + Threshold optimisation ---------------------------
     print("\n[8/9] Threshold optimisation...")
 
+    # Test set is Benign-dominant (şartname v2.0 "Klinik Stres Testi"); tune the
+    # threshold for the per-panel TEST prior, not the training prior or 50/50.
+    panel_prior = TEST_PRIORS.get(panel_name, 0.5)
+    print(f"  target test prior (pathogenic fraction): {panel_prior:.3f}")
+
     # Raw threshold (training prior, inflated) — always reported for comparison.
     f1_t_raw, f1_val_raw = optimize_threshold_f1(y_train_val, oof_probs)
-    # Balanced-prior threshold on raw OOF.
+    # Test-prior threshold on raw OOF.
     f1_t_bal, f1_val_bal, f1_std_bal = optimize_threshold_f1_balanced(
-        y_train_val.values, oof_probs, target_prior=0.5, n_bootstrap=200)
+        y_train_val.values, oof_probs, target_prior=panel_prior, n_bootstrap=200)
 
     if use_platt:
         platt_fitted = fit_platt(oof_probs, y_train_val.values)
@@ -715,9 +724,9 @@ def run_panel(panel_name: str,
         print(f"  Platt fit: a={platt_fitted['a']:.3f}, b={platt_fitted['b']:.3f}")
         print(f"  Calibration ECE: raw={cal_before['ece']:.4f} -> "
               f"calibrated={cal_after['ece']:.4f}  (lower is better)")
-        # Balanced threshold on calibrated OOF (deployed)
+        # Test-prior threshold on calibrated OOF (deployed)
         f1_t_cal, f1_val_cal, f1_std_cal = optimize_threshold_f1_balanced(
-            y_train_val.values, oof_calibrated, target_prior=0.5, n_bootstrap=200)
+            y_train_val.values, oof_calibrated, target_prior=panel_prior, n_bootstrap=200)
         deployed_probs = oof_calibrated
         f1_t = f1_t_cal
     else:
@@ -744,12 +753,15 @@ def run_panel(panel_name: str,
     tp_b, fp_b, tn_b, fn_b, spec_b = _cm_stats(deployed_probs, ba_t)
     n_ben = int((y_train_val == 0).sum())
 
-    print(f"  Raw F1-opt        t={f1_t_raw}  F1={f1_val_raw:.4f}  (training prior; inflated)")
-    print(f"  Bal F1-opt (raw)  t={f1_t_bal}  F1={f1_val_bal:.4f} ± {f1_std_bal:.4f}")
+    print(f"  Raw F1-opt          t={f1_t_raw}  F1={f1_val_raw:.4f}  (training prior; inflated)")
+    print(f"  Test-prior F1 (raw) t={f1_t_bal}  F1={f1_val_bal:.4f} ± {f1_std_bal:.4f}")
     if use_platt:
-        print(f"  Bal F1-opt (cal)  t={f1_t_cal}  F1={f1_val_cal:.4f} ± {f1_std_cal:.4f}  <- deployed")
+        print(f"  Test-prior F1 (cal) t={f1_t_cal}  F1={f1_val_cal:.4f} ± {f1_std_cal:.4f}  <- deployed")
     print(f"  BA-opt            t={ba_t}  BA={ba_val:.4f}  Spec={spec_b:.3f}  "
           f"BenErr={fp_b}/{n_ben}={fp_b/max(n_ben,1)*100:.1f}%")
+    mcc_val, mcc_std = mcc_at_prior(y_train_val.values, deployed_probs, f1_t,
+                                    target_prior=panel_prior, n_bootstrap=200)
+    print(f"  MCC (test prior)    {mcc_val:.4f} ± {mcc_std:.4f}  (at deployed t={f1_t})")
 
     # -- [9] Evaluation & analysis -------------------------------------------
     print("\n[9/9] Evaluation")
@@ -774,6 +786,8 @@ def run_panel(panel_name: str,
             "f1_calibrated_optimal": f1_t_cal,
             "f1_calibrated_value":   f1_val_cal,   # deployed F1 (Platt + balanced)
             "f1_calibrated_std":     f1_std_cal,
+            "mcc_test_prior":        mcc_val,      # honest MCC at deployed t, test prior
+            "mcc_test_prior_std":    mcc_std,
             "ba_optimal":            ba_t,
             "ba_value":              round(ba_val, 4),
             "specificity_ba":        round(spec_b, 4),
@@ -914,10 +928,10 @@ def main():
 
     # Summary table
     print(f"\n{'#' * 70}")
-    print(f"  SUMMARY  (* = honest est. F1 at the rules-guaranteed 50/50 test prior)")
+    print(f"  SUMMARY  (* = honest est. F1 at the per-panel test prior; test set is Benign-dominant, v2.0)")
     print(f"{'#' * 70}")
     print(f"  {'Panel':<8} {'AUC':<7} {'raw F1':<8} "
-          f"{'bal F1*':<9} {'cal F1*':<9} {'cal t':<7} {'ECE':<7}")
+          f"{'bal F1*':<9} {'cal F1*':<9} {'MCC*':<8} {'cal t':<7} {'ECE':<7}")
     print(f"  {'-'*60}")
     for pn in panels:
         r = all_results.get(pn, {})
@@ -930,6 +944,7 @@ def main():
               f"{thr.get('f1_raw_value',0):<8.4f} "
               f"{thr.get('f1_balanced_value',0):<9.4f} "
               f"{thr.get('f1_calibrated_value',0):<9.4f} "
+              f"{thr.get('mcc_test_prior',0):<8.4f} "
               f"{thr.get('f1_calibrated_optimal','?'):<7} "
               f"{cal.get('ece_calibrated',0):<7.4f}")
 

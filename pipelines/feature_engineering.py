@@ -227,6 +227,51 @@ def engineer_aa_features(df: pd.DataFrame,
     return df
 
 
+def engineer_acmg_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Add ACMG/AMP-inspired domain features (enabled per-panel via ACMG_PANELS).
+
+    Grounded in the verified column-family dictionary:
+      AL_ = gnomAD/AllofUs allele frequencies; EK_4/5/6 = phastCons,
+      EK_7 = phyloP100way, EK_2 = GERP++ RS.
+
+    Features (stateless — identical at train and inference):
+      acmg_max_af     max minor-allele frequency across population columns
+                      (missing -> 0.0 = "absent"); common => benign
+      acmg_ba1        1 if max_af > 0.05   (ACMG BA1: stand-alone benign)
+      acmg_bs1        1 if max_af > 0.01   (ACMG BS1: strong benign)
+      acmg_phastcons  mean of the phastCons tracks (conservation in [0,1])
+      acmg_conserved  1 if phyloP100way > 2 or GERP++ RS > 2  (PP3-style)
+
+    The frequency AND conservation groups TOGETHER lift the small PAH panel
+    (F1 +0.044, AUC +0.017); either group alone drops PAH below baseline, so the
+    full block is kept and gated to PAH (utils.ACMG_PANELS) — each panel is its own
+    model and the block is neutral/harmful on the data-rich panels.
+
+    Leakage guard: no "AF-is-missing" flag (missingness is a partial artefact);
+    only high OBSERVED frequency drives the benign signal. Minor-AF columns are
+    detected by signature (values in (0,1) + low column mean), excluding the
+    allele-number column, the binary flags, and major-allele (~1) columns.
+    """
+    al_cols = [c for c in df.columns if c.startswith("AL_")]
+    af_cols = [c for c in al_cols
+               if ((df[c] > 0) & (df[c] < 1)).any() and df[c].mean(skipna=True) < 0.1]
+    df["acmg_max_af"] = df[af_cols].max(axis=1).fillna(0.0) if af_cols else 0.0
+    df["acmg_ba1"] = (df["acmg_max_af"] > 0.05).astype(int)
+    df["acmg_bs1"] = (df["acmg_max_af"] > 0.01).astype(int)
+
+    pc = [c for c in ("EK_4", "EK_5", "EK_6") if c in df.columns]
+    if pc:
+        df["acmg_phastcons"] = df[pc].mean(axis=1)
+    conserved = pd.Series(False, index=df.index)
+    if "EK_7" in df.columns:          # phyloP100way
+        conserved = conserved | (df["EK_7"] > 2.0)
+    if "EK_2" in df.columns:          # GERP++ RS
+        conserved = conserved | (df["EK_2"] > 2.0)
+    df["acmg_conserved"] = conserved.fillna(False).astype(int)
+
+    return df
+
+
 # ---------------------------------------------------------------------------
 # Cross-feature interactions
 #
