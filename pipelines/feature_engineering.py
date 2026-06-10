@@ -227,6 +227,43 @@ def engineer_aa_features(df: pd.DataFrame,
     return df
 
 
+def engineer_blosum_extras(df: pd.DataFrame,
+                           ref_col: str = "AA_1", alt_col: str = "AA_2",
+                           inplace: bool = False) -> pd.DataFrame:
+    """Extra BLOSUM62-derived columns from Almira's experiment, restricted to the
+    pieces engineer_aa_features does NOT already provide.
+
+    engineer_aa_features already has AA_blosum62 (the score), AA_is_conservative
+    (>=0), AA_is_radical (<=-3), AA_same and AA_is_multiletter — so the raw score,
+    aa_same and the unknown flag would be duplicates and are intentionally omitted.
+    What is genuinely new: the |score| magnitude and an explicit sign trichotomy
+    (negative / zero / positive), which split the score differently than the
+    conservative/radical thresholds.
+
+    Leakage-safe: derived only from AA_1/AA_2 (no labels), so it reproduces on the
+    judges' test inputs.
+
+    STATUS: tested and NOT adopted. analysis/feature_ablation.py (honest test-prior,
+    repeated 10-fold CV, 2026-06-07) showed no F1* gain on any panel — every delta
+    vs the deployed AA features was within noise, and mRMR selected one of these
+    flags only once (cancer: AA_blosum_zero_flag, +0.006, noise). The signal is
+    already captured by AA_blosum62 in engineer_aa_features. Kept for reference and
+    reproducibility; deliberately NOT wired into run_pipeline/predict. If re-enabled
+    later, mirror it in predict.apply_preprocessing (it is stateless, so that is the
+    only change needed for test purity).
+    """
+    if not inplace:
+        df = df.copy()
+    aa1 = df[ref_col].astype(object) if ref_col in df.columns else pd.Series([np.nan] * len(df))
+    aa2 = df[alt_col].astype(object) if alt_col in df.columns else pd.Series([np.nan] * len(df))
+    b = pd.Series([blosum62(r, a) for r, a in zip(aa1, aa2)], index=df.index)
+    df["AA_blosum_abs"]       = b.abs()
+    df["AA_blosum_neg_flag"]  = ((b < 0) & b.notna()).astype(int)
+    df["AA_blosum_zero_flag"] = ((b == 0) & b.notna()).astype(int)
+    df["AA_blosum_pos_flag"]  = ((b > 0) & b.notna()).astype(int)
+    return df
+
+
 def engineer_acmg_features(df: pd.DataFrame) -> pd.DataFrame:
     """Add ACMG/AMP-inspired domain features (enabled per-panel via ACMG_PANELS).
 

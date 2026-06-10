@@ -1,6 +1,14 @@
 """
 PathoSense — Competition Pipeline
 
+⚠️ LEGACY EVAL (2026-06-10): superseded by the rework. Deployment is now
+`pipelines/predict.py` (per-panel recipe in `recipe.py` + cross-panel transfer in
+`transfer.py`), and honest evaluation is `analysis/harness.py`. This script's
+median-impute + mRMR-60 recipe, single 85/15 split, and `metrics.json` numbers are
+INFLATED (it also fits feature selection on data it evaluates on). Kept for reference
+and because predict.py still imports `preprocess_data`, `get_model_params`,
+`train_multi_seed_ensemble` from it. See docs/METHODS.md.
+
 Missense variant pathogenicity classifier for TEKNOFEST 2026 AI in Health.
 Binary classification (Pathogenic vs Benign) using LightGBM multi-seed ensemble.
 
