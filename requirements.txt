@@ -1,9 +1,14 @@
-numpy>=1.21
-pandas>=1.3
-scikit-learn>=1.0
-lightgbm>=3.3
-shap>=0.40
-matplotlib>=3.5
-scipy>=1.7
-joblib>=1.0
-rdata
+# PathoSense — deployment dependencies (pinned to tested versions).
+# Target: Python 3.12 (system 3.14 is too new for the sci stack).
+#   uv venv --python 3.12 .venv && uv pip install -r requirements.txt
+# The finals jury re-runs the code, so these are pinned for reproducibility.
+
+numpy==2.4.6
+pandas==2.3.3
+scikit-learn==1.8.0
+lightgbm==4.6.0          # 4.x required: native categoricals + lgb.early_stopping callbacks
+catboost==1.2.10         # used by general_blend + the cftr/cancer blended transfer scorer
+scipy==1.17.1
+joblib==1.5.3
+matplotlib==3.10.9       # imported by run_pipeline (Agg backend) on the predict.py import path
+shap==0.51.0             # optional (run_pipeline SHAP plots; guarded by try/except)
