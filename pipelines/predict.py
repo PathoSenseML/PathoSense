@@ -42,11 +42,68 @@ from utils import (detect_leaky_columns, optimize_threshold_f1,
                    optimize_threshold_f1_balanced, KNOWN_LEAKY, PANELS, TEST_PRIORS)
 from run_pipeline import (preprocess_data, get_model_params, train_multi_seed_ensemble)
 from recipe import PANEL_RECIPE
-from transfer import TRANSFER_PANELS, fit_transfer_scorer, transfer_score
+from transfer import (TRANSFER_PANELS, fit_transfer_scorer, transfer_score,
+                      TRANSFER_FINETUNE, crossfit_finetuned_g, finetune_and_store)
 from general_blend import fit_general_blend, general_blend_probs
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODELS_DIR = os.path.join(BASE_DIR, "models")
+
+# Per-panel deployed-threshold override (else optimize_threshold_f1_balanced on full-train OOF).
+# cancer: the bootstrap selector overshot to 0.85 (a single full-train draw on the DOWNSLOPE). Honest
+# per-fold CV (current rfup+fam_flags scorer) shows the method's per-fold picks CENTER at ~0.81
+# (0.805/0.814 across 2 seeds = train-justified, not a peeked test-peak) and that a fixed 0.81 beats
+# the adaptive selection by +0.011..+0.016 (>=1.86σ both seeds) and beats fixed-0.85 by ~+0.008-0.010
+# → cancer F1* ~0.720 → ~0.735. (analysis/exp_cancer_threshold_check.py + exp_cancer_threshold_confirm.py;
+# lead from Öykü's threshold-stability analysis.)
+# general: selector picks 0.827 (→0.83) but honest per-fold optimum is 0.82; fixed 0.82 beats the
+# selector +0.005 (1.46σ/1.95σ) and fixed-0.83 +0.003, both seeds → ~0.530→~0.533 (small, train-justified).
+# pah (selector 0.822 = optimum) and cftr (selector 0.888 ≈ deployed 0.90; the test-better 0.92 is ABOVE
+# the selector's center = small-sample tail-chasing, not train-justified) keep the data-driven selector.
+# (analysis/exp_threshold_check_all.py)
+THRESHOLD_OVERRIDE = {"cancer": 0.81, "general": 0.82}
+
+# Per-panel LGBM-param overrides on top of get_model_params. general: scale_pos_weight=1 (no class
+# balancing — the threshold-at-prior handles the prior; rework found it best) + ACTIVATE bagging
+# (the deployed subsample=0.8 is INERT without bagging_freq). On the general LGBM this is +0.0082 F1*
+# (+2.52σ) / +0.0031 AUC (+4.36σ); in the LGBM+RF+CatBoost blend it dilutes to +0.0021/+0.0030 F1*
+# (both seeds +, AUC + both) → DEPLOYED. (analysis/exp_general_params.py + exp_general_spwbag_confirm.py.)
+# ONLY general — the small panels need their class weighting + no row subsampling on tiny data.
+LGBM_PARAM_OVERRIDE = {"general": {"scale_pos_weight": 1.0, "bagging_freq": 1, "bagging_fraction": 0.8}}
+
+# Per-member redundancy prune: the general matrix has ~16 >0.99-correlated clusters (one 79-col!) that
+# the corr-drop misses (corr(min_periods=30)=NaN for sparse AL pairs). They hurt the greedy LightGBM but
+# NOT the redundancy-robust RF (max_features=0.3)/CatBoost/XGB. So prune them for the LGBM ONLY, keep full
+# features for the blend members → F1* +0.0018 / AUC + (positive all 3 seeds; analysis/exp_mask_final.py).
+# Pruning the WHOLE blend instead is negative (exp_mask_blend_gate.py). general only.
+REDUN_PRUNE_LGBM = {"general"}
+
+
+def _lgbm_redun_keep(X_pp, thr=0.99):
+    """Columns to keep for the LGBM: drop numeric cols with a |corr|>thr partner already kept (keep the
+    lowest-missingness representative per cluster); all categoricals kept. Label-free."""
+    from collections import defaultdict
+    cats = [c for c in X_pp.columns if isinstance(X_pp[c].dtype, pd.CategoricalDtype)]
+    numc = [c for c in X_pp.columns if c not in cats]
+    if len(numc) < 2:
+        return list(X_pp.columns)
+    M = X_pp[numc].apply(pd.to_numeric, errors="coerce")
+    C = M.corr().abs().fillna(0.0).values
+    miss = M.isna().mean()
+    parent = {c: c for c in numc}
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]; a = parent[a]
+        return a
+    for i in range(len(numc)):
+        for j in range(i + 1, len(numc)):
+            if C[i, j] > thr:
+                parent[find(numc[i])] = find(numc[j])
+    cl = defaultdict(list)
+    for c in numc:
+        cl[find(c)].append(c)
+    keep_num = {min(v, key=lambda c: miss[c]) for v in cl.values()}
+    return [c for c in X_pp.columns if (c in keep_num) or (c in cats)]
 
 
 # ---------------------------------------------------------------------------
@@ -187,9 +244,17 @@ def train_and_save(panel_name):
         X_pp, prep_art = _fit_own_preprocess(X, y, cfg)
         spw = (y == 0).sum() / max((y == 1).sum(), 1)
         params = get_model_params(len(X_pp), spw)
+        if panel_name in LGBM_PARAM_OVERRIDE:
+            params = {**params, **LGBM_PARAM_OVERRIDE[panel_name]}
+            print(f"  LGBM param override: {LGBM_PARAM_OVERRIDE[panel_name]}")
         n_folds = 3 if len(X_pp) < 200 else 5
+        lgbm_keep = None; X_pp_lgbm = X_pp
+        if panel_name in REDUN_PRUNE_LGBM:
+            lgbm_keep = _lgbm_redun_keep(X_pp)
+            X_pp_lgbm = X_pp[lgbm_keep]
+            print(f"  LGBM redundancy prune (>0.99 near-dups): {len(X_pp.columns)} -> {len(lgbm_keep)} cols")
         models, oof, _, oof_std = train_multi_seed_ensemble(
-            X_pp, y, X_pp, params, n_seeds=5, n_folds=n_folds)
+            X_pp_lgbm, y, X_pp_lgbm, params, n_seeds=5, n_folds=n_folds)
         platt_own = fit_platt(oof, y.values)
         own_oof_cal = apply_platt(oof, platt_own)
         print(f"  own model: {len(prep_art['feats'])} feats, OOF AUC={roc_auc_score(y, oof):.4f}")
@@ -198,6 +263,7 @@ def train_and_save(panel_name):
             blend_art, own_oof_cal = fit_general_blend(X_pp, y, own_oof_cal, spw, n_splits=n_folds)
             print(f"  + RF+CatBoost blend (decorrelation): blended-OOF AUC={roc_auc_score(y, own_oof_cal):.4f}")
         own = {"prep_art": prep_art, "models": models, "platt": platt_own, "blend": blend_art,
+               "lgbm_keep": lgbm_keep,   # per-member: LGBM uses pruned cols; blend uses full X_pp
                "params": {k: v for k, v in params.items() if k != "verbose"}}
     else:
         own_oof_cal = None
@@ -205,12 +271,21 @@ def train_and_save(panel_name):
     transfer = {}
     if w is not None:
         art = fit_transfer_scorer(panel_name)
-        g = transfer_score(df, art)                 # OOS for this panel's rows
+        ft_cfg = TRANSFER_FINETUNE.get(panel_name)
+        if ft_cfg:
+            # panel fine-tune: CROSS-FIT OOF finetuned scores for honest Platt/threshold, then store the
+            # full-panel finetuned booster for OUT-OF-SAMPLE finals inference (novel target variants).
+            g = crossfit_finetuned_g(art, df, y, ft_cfg)
+            art = finetune_and_store(art, df, y, ft_cfg)
+            print(f"  transfer scorer FINE-TUNED on {panel_name} (+{ft_cfg['K']} trees, w={ft_cfg['weights']}); "
+                  f"OOF-finetuned AUC={roc_auc_score(y, g):.4f}")
+        else:
+            g = transfer_score(df, art)             # OOS for this panel's rows
+            print(f"  transfer scorer: AUC on {panel_name}={roc_auc_score(y, g):.4f} "
+                  f"(trained on {art['n_train']} rows, excl {art['n_excluded']} ids)")
         platt_g = fit_platt(g, y.values)
         g_oof_cal = apply_platt(g, platt_g)
         transfer = {"art": art, "platt": platt_g, "w": w}
-        print(f"  transfer scorer: AUC on {panel_name}={roc_auc_score(y, g):.4f} "
-              f"(trained on {art['n_train']} rows, excl {art['n_excluded']} ids)")
     else:
         g_oof_cal = None
 
@@ -225,6 +300,11 @@ def train_and_save(panel_name):
     f1_t_raw, f1_val_raw = optimize_threshold_f1(y, blend_oof)
     threshold, f1_bal, f1_std = optimize_threshold_f1_balanced(
         y.values, blend_oof, target_prior=prior, n_bootstrap=300)
+    if panel_name in THRESHOLD_OVERRIDE:
+        sel = threshold
+        threshold = THRESHOLD_OVERRIDE[panel_name]
+        print(f"  threshold OVERRIDE: selector picked {sel} -> deploying fixed {threshold} "
+              f"(honest CV: fixed beats selector +~0.01)")
     print(f"  deployed threshold (test prior {prior:.3f}): t={threshold} "
           f"F1*={f1_bal:.4f}±{f1_std:.4f}  (raw-prior F1={f1_val_raw:.4f})")
 
@@ -267,7 +347,9 @@ def predict(input_csv, panel_name, output_csv):
         avail = [c for c in art["feature_cols"] if c in df_eng.columns]
         X = df_eng[avail].copy()
         X_pp = _apply_own_preprocess(X, art["own"]["prep_art"])
-        e = np.mean([m.predict_proba(X_pp)[:, 1] for m in art["own"]["models"]], axis=0)
+        keep = art["own"].get("lgbm_keep")        # per-member: LGBM on pruned cols, blend on full X_pp
+        X_lgbm = X_pp[[c for c in keep if c in X_pp.columns]] if keep else X_pp
+        e = np.mean([m.predict_proba(X_lgbm)[:, 1] for m in art["own"]["models"]], axis=0)
         e_cal = apply_platt(e, art["own"]["platt"])
         if art["own"].get("blend") is not None:
             e_cal = general_blend_probs(X_pp, e_cal, art["own"]["blend"])
