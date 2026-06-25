@@ -63,6 +63,33 @@ def group_of(col):
     return "Other"
 
 
+def group_perm_importance(model, X, y, n_repeats=10, seed=42):
+    """AUC-drop permutation importance per FEATURE GROUP. All columns of a group are
+    permuted JOINTLY (one shared row permutation) so within-group correlation is kept
+    and we measure the group's marginal contribution, not double-counting collinear
+    members. Returns (base_auc, Series group->mean AUC drop)."""
+    from sklearn.metrics import roc_auc_score
+    rng = np.random.RandomState(seed)
+    base = roc_auc_score(y, model.predict_proba(X)[:, 1])
+    groups = {}
+    for c in X.columns:
+        groups.setdefault(group_of(c), []).append(c)
+    out = {}
+    for g, cols in groups.items():
+        drops = []
+        for _ in range(n_repeats):
+            Xp = X.copy(); perm = rng.permutation(len(Xp))
+            for c in cols:
+                col = X[c]
+                if isinstance(col.dtype, pd.CategoricalDtype):
+                    Xp[c] = pd.Categorical(col.to_numpy()[perm], categories=col.cat.categories)
+                else:
+                    Xp[c] = col.to_numpy()[perm]
+            drops.append(base - roc_auc_score(y, model.predict_proba(Xp)[:, 1]))
+        out[g] = float(np.mean(drops))
+    return base, pd.Series(out).sort_values(ascending=False)
+
+
 def _project_transfer(panel, tart):
     """Rebuild the target matrix in the transfer scorer's feature space (mirrors
     transfer.transfer_score up to model input)."""
@@ -130,30 +157,44 @@ def analyze(panel):
             plt.close(); plotted = True
         except Exception as e:
             print(f"  [{panel}] beeswarm failed: {e}")
-    return panel, driver, len(feats), grp, top, plotted
+    # group permutation importance (AUC drop) on the same driver model
+    base_auc, gpi = group_perm_importance(model, X, y)
+    return panel, driver, len(feats), grp, top, plotted, base_auc, gpi
 
 
 def main():
     sections = []
     for panel in ["general", "cancer", "pah", "cftr"]:
-        panel, driver, nfeat, grp, top, plotted = analyze(panel)
-        print(f"{panel}: driver={driver}, {nfeat} feats, plot={plotted}", flush=True)
+        panel, driver, nfeat, grp, top, plotted, base_auc, gpi = analyze(panel)
+        print(f"{panel}: driver={driver}, {nfeat} feats, plot={plotted}, base_auc={base_auc:.4f}", flush=True)
         lines = [f"## {panel.upper()}  (driver: {driver}; {nfeat} features)\n",
                  "**Feature-group contribution (% of total |SHAP|):**\n",
                  "| group | % |", "|---|---|"]
         for g, v in grp.items():
             lines.append(f"| {g} | {v:.1f}% |")
+        # group permutation importance (AUC drop when the whole group is permuted)
+        tot = gpi.clip(lower=0).sum() or 1.0
+        lines += ["", f"**Group permutation importance** (AUC drop when group permuted; "
+                  f"base AUC = {base_auc:.4f}):\n",
+                  "| group | AUC drop | % of total |", "|---|---|---|"]
+        for g, v in gpi.items():
+            lines.append(f"| {g} | {v:+.4f} | {max(v,0)/tot*100:.1f}% |")
         lines += ["", "**Top features:**\n", "| feature | dictionary | mean|SHAP| |", "|---|---|---|"]
         for _, r in top.iterrows():
             lines.append(f"| {r['feature']} | {r['name']} | {r['mean_abs_shap']:.4f} |")
         if plotted:
             lines += ["", f"![{panel} SHAP](shap_{panel}.png)"]
         sections.append("\n".join(lines))
-    header = ("# Explainability — deployed models (SHAP feature-group analysis)\n\n"
-              "SHAP via LightGBM `pred_contrib` on the variants each panel's driving model "
-              "scores. general uses its own all-features model; cftr/pah/cancer are scored by "
-              "the general-trained transfer scorer (cancer additionally blends a 50% own model). "
-              "Aggregated into feature groups + top individual features (verified column dict).\n")
+    header = ("# Explainability — deployed models (SHAP + group permutation importance)\n\n"
+              "Two complementary feature-group views on each panel's DRIVING model:\n"
+              "  * **SHAP** (LightGBM `pred_contrib`) — how much each group contributes to the "
+              "model's output, aggregated as % of total |SHAP|.\n"
+              "  * **Group permutation importance** — the AUC drop when an entire group's columns "
+              "are jointly permuted (the group's marginal predictive value).\n\n"
+              "general uses its own all-features model; cftr/pah/cancer are scored by the "
+              "general-trained transfer scorer (cancer additionally blends a 50% own model; for "
+              "the blended cftr/cancer scorers both views use the LightGBM component). "
+              "Annotated with the verified column dictionary.\n")
     with open(os.path.join(OUT, "EXPLAINABILITY.md"), "w") as f:
         f.write(header + "\n\n---\n\n".join(sections) + "\n")
     print(f"\nsaved -> {os.path.join(OUT, 'EXPLAINABILITY.md')}")
