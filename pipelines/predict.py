@@ -5,8 +5,9 @@ Per-panel recipe (pipelines/recipe.py) + cross-panel transfer (pipelines/transfe
   general — own model only, IMPROVED recipe: native-NaN preprocessing + ALL features
             (no mRMR) + AL_ fam_flags. (general is the transfer source.)
   cftr    — pure general-transfer scorer (w=1.0); own model unused.
-  cancer  — pure general-transfer scorer (w=1.0); own model unused.
-  pah     — 0.5·general-transfer + 0.5·own(deployed median+mRMR) blend.
+  cancer  — 0.5·general-transfer + 0.5·own(median+mRMR) blend (w=0.5).
+  pah     — pure general-transfer scorer (w=1.0); own model unused.
+  (Deployed weights live ONLY in transfer.TRANSFER_PANELS — the single source of truth.)
 
 All preprocessing/feature/calibration steps are fit on the panel's training data and
 replayed purely at inference (batch-invariant). The transfer scorer excludes the
@@ -40,7 +41,7 @@ from calibration import fit_platt, apply_platt
 from preprocess_v2 import fit_keep_nan, apply_keep_nan, fit_al, apply_al, fast_mrmr
 from utils import (detect_leaky_columns, optimize_threshold_f1,
                    optimize_threshold_f1_balanced, KNOWN_LEAKY, PANELS, TEST_PRIORS)
-from run_pipeline import (preprocess_data, get_model_params, train_multi_seed_ensemble)
+from models import (preprocess_data, get_model_params, train_multi_seed_ensemble)
 from recipe import PANEL_RECIPE
 from transfer import (TRANSFER_PANELS, fit_transfer_scorer, transfer_score,
                       TRANSFER_FINETUNE, crossfit_finetuned_g, finetune_and_store)
@@ -61,7 +62,13 @@ MODELS_DIR = os.path.join(BASE_DIR, "models")
 # pah (selector 0.822 = optimum) and cftr (selector 0.888 ≈ deployed 0.90; the test-better 0.92 is ABOVE
 # the selector's center = small-sample tail-chasing, not train-justified) keep the data-driven selector.
 # (analysis/exp_threshold_check_all.py)
-THRESHOLD_OVERRIDE = {"cancer": 0.81, "general": 0.82}
+# RECALIBRATED 2026-06-26 after the audit fixes (#6 nested-ES OOF, #3 fast_mrmr) shifted general's &
+# cancer's calibration: re-running the honest per-fold grid on the POST-FIX deployed blend (faithful;
+# 3 seeds; analysis/exp_threshold_recalibrate.py) moves both DOWN one notch — general 0.82→0.81
+# (+0.0048, +3.51σ, per-seed [.81,.81,.80], selector center .82-.83 → overshoot), cancer 0.81→0.80
+# (+0.0062, +2.87σ, at selector center ~.79). cancer 0.84 showed a bigger +0.018 but sits ABOVE the
+# selector center on a bumpy landscape (same tail-chasing pattern as cftr-0.92) → NOT deployed.
+THRESHOLD_OVERRIDE = {"cancer": 0.80, "general": 0.81}
 
 # Per-panel LGBM-param overrides on top of get_model_params. general: scale_pos_weight=1 (no class
 # balancing — the threshold-at-prior handles the prior; rework found it best) + ACTIVATE bagging

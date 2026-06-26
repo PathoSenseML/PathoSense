@@ -3,9 +3,11 @@
 A model trained on the large GENERAL panel generalizes to the small panels far
 better than their own data-starved models. Honest, leakage-corrected CV (exclude
 ALL target Variant_IDs from the general scorer — finals target variants are novel):
-  cftr   general scorer AUC 0.91 vs own 0.77  -> pure general (w=1.0) F1* 0.52->0.72 (+0.21, 3.8σ)
-  cancer general scorer AUC 0.93 vs own 0.91  -> pure general (w=1.0) F1* 0.66->0.71 (+0.046, 2.4σ)
-  pah    general scorer AUC 0.74 ≈ own 0.74   -> equal blend (w=0.5) F1* 0.55->0.60 (+0.044, 2.6σ)
+  cftr   pure general transfer (w=1.0)        -> F1* 0.529->0.836  (general scorer AUC ~0.91 >> own 0.77)
+  cancer 0.5 transfer + 0.5 own blend (w=0.5) -> F1* 0.665->0.708  (transfer AUC ~0.92 ≈ own; blend wins)
+  pah    pure general transfer (w=1.0)        -> F1* 0.549->0.660  (transfer AUC ~0.80 > own)
+(DEPLOYED weights are TRANSFER_PANELS below — the SINGLE SOURCE OF TRUTH. cancer=0.5 blend; cftr/pah=1.0 pure.
+ Earlier drafts of this header had cancer/pah swapped — do NOT reconcile docstrings against memory, trust the code.)
 (63-69% of small-panel Variant_IDs are shared with general; the prior feature-vector
 exclusion missed them and leaked — Variant_ID exclusion is the correct control.)
 
@@ -32,7 +34,7 @@ from schema import (normalize_sentinels, drop_all_nan_rows, to_categorical,
                     partition_columns)
 from feature_engineering import engineer_aa_features
 from utils import detect_leaky_columns, KNOWN_LEAKY, PANELS
-from run_pipeline import get_model_params
+from models import get_model_params
 from preprocess_v2 import fit_keep_nan, apply_keep_nan, fit_al, apply_al
 from general_blend import _rf_repr, _cat_repr, _cat_model
 

@@ -290,6 +290,14 @@ def engineer_acmg_features(df: pd.DataFrame) -> pd.DataFrame:
     allele-number column, the binary flags, and major-allele (~1) columns.
     """
     al_cols = [c for c in df.columns if c.startswith("AL_")]
+    # NOTE (latent, currently DORMANT): af_cols is detected from the data passed
+    # in, so on a small inference batch (e.g. single-row finals scoring) `.any()`
+    # / `.mean()` can pick a different column set than at fit -> NOT batch-invariant.
+    # Harmless today: ACMG features are gated to pah (utils.ACMG_PANELS), and pah
+    # is pure-transfer (TRANSFER_PANELS["pah"]=1.0) so its own model — the only
+    # consumer of these columns — is never built (predict.py need_own=False).
+    # If pah is ever switched to a blend (w<1.0), freeze af_cols at fit time and
+    # thread them through (add a fitted-state param) before relying on this.
     af_cols = [c for c in al_cols
                if ((df[c] > 0) & (df[c] < 1)).any() and df[c].mean(skipna=True) < 0.1]
     df["acmg_max_af"] = df[af_cols].max(axis=1).fillna(0.0) if af_cols else 0.0

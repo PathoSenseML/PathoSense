@@ -3,14 +3,15 @@
 Implements Platt scaling (Platt 1999) — a 2-parameter logistic regression
 fit on log-odds of predicted probabilities. Standard formulation:
 
-    calibrated_p = 1 / (1 + exp(a * logit(raw_p) + b))
+    calibrated_p = 1 / (1 + exp(-(a * logit(raw_p) + b)))   # = sigmoid(a·logit(raw_p) + b)
 
 Where:
     logit(p) = log(p / (1 - p))
     a, b are fitted by maximum likelihood on (logit(oof_probs), y_true).
 
 When the underlying model already produces well-calibrated probabilities,
-Platt fits ~(a=-1, b=0) -- effectively the identity in sigmoid space.
+Platt fits ~(a=+1, b=0) -- effectively the identity in sigmoid space.
+(apply_platt computes z = a·logit(p) + b then sigmoid(z); see the code below.)
 When the model systematically under- or over-predicts, Platt corrects it.
 
 For PathoSense the model is trained with `scale_pos_weight = n_neg/n_pos`

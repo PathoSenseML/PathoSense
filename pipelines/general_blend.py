@@ -78,8 +78,8 @@ def fit_general_blend(X_pp, y, lgb_oof_cal, spw, n_splits=5):
         cat_oof[b] = cb.predict_proba(X_cat.iloc[b])[:, 1]
     rf_platt = fit_platt(rf_oof, y.values); cat_platt = fit_platt(cat_oof, y.values)
     xgb_platt = fit_platt(xgb_oof, y.values)
-    blend_oof = (np.asarray(lgb_oof_cal) + apply_platt(rf_oof, rf_platt)
-                 + apply_platt(cat_oof, cat_platt) + apply_platt(xgb_oof, xgb_platt)) / 4.0
+    members_oof = [np.asarray(lgb_oof_cal), apply_platt(rf_oof, rf_platt),
+                   apply_platt(cat_oof, cat_platt), apply_platt(xgb_oof, xgb_platt)]
 
     rf_final = _rf_general().fit(X_ord, y)
     xgb_final = _xgb_model().fit(X_ord, y)
@@ -88,7 +88,15 @@ def fit_general_blend(X_pp, y, lgb_oof_cal, spw, n_splits=5):
     cat_final.fit(X_cat.iloc[i2], y.iloc[i2], eval_set=(X_cat.iloc[ies], y.iloc[ies]))
     art = {"rf_model": rf_final, "cat_model": cat_final, "xgb_model": xgb_final, "encoder": enc,
            "cat_feats": cat_feats, "cat_idx": cat_idx,
-           "rf_platt": rf_platt, "cat_platt": cat_platt, "xgb_platt": xgb_platt}
+           "rf_platt": rf_platt, "cat_platt": cat_platt, "xgb_platt": xgb_platt, "tabpfn": None}
+    # OPTIONAL equal-weight TabPFN-v2.6 5th member (the only lift past the GBDT ceiling: +0.0025 AUC,
+    # ~+0.01 F1). Graceful fallback to the 4-tree blend if TabPFN is unavailable (no token/GPU/license).
+    from tabpfn_member import fit_tabpfn_member
+    tab_art, tab_oof_cal = fit_tabpfn_member(X_pp, y, cat_feats, n_splits)
+    if tab_art is not None:
+        members_oof.append(tab_oof_cal); art["tabpfn"] = tab_art
+        print("  + TabPFN-v2.6 member: 5-way EQUAL-weight blend (general only)")
+    blend_oof = np.mean(members_oof, axis=0)
     return art, blend_oof
 
 
@@ -126,7 +134,10 @@ def general_blend_probs(X_pp, lgb_probs_cal, art):
     rf_p = apply_platt(art["rf_model"].predict_proba(X_ord)[:, 1], art["rf_platt"])
     X_cat = _cat_repr(X_pp, art["cat_feats"])
     cat_p = apply_platt(art["cat_model"].predict_proba(X_cat)[:, 1], art["cat_platt"])
-    if art.get("xgb_model") is None:
-        return (np.asarray(lgb_probs_cal) + rf_p + cat_p) / 3.0
-    xgb_p = apply_platt(art["xgb_model"].predict_proba(X_ord)[:, 1], art["xgb_platt"])
-    return (np.asarray(lgb_probs_cal) + rf_p + cat_p + xgb_p) / 4.0
+    members = [np.asarray(lgb_probs_cal), rf_p, cat_p]
+    if art.get("xgb_model") is not None:                       # pre-XGB artifacts -> 3-way
+        members.append(apply_platt(art["xgb_model"].predict_proba(X_ord)[:, 1], art["xgb_platt"]))
+    if art.get("tabpfn") is not None:                          # optional TabPFN-v2.6 5th member
+        from tabpfn_member import tabpfn_member_probs
+        members.append(tabpfn_member_probs(X_pp, art["tabpfn"]))
+    return np.mean(members, axis=0)

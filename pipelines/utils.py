@@ -66,16 +66,27 @@ def detect_leaky_columns(X: pd.DataFrame, y: pd.Series,
         vals = X[col]
         is_cat = isinstance(vals.dtype, pd.CategoricalDtype)
 
-        # Missingness-pattern leak (applies to both numeric and categorical)
+        # Missingness-pattern leak (applies to both numeric and categorical).
+        # Flag only if the missing rows are PURE one class AND that purity is
+        # implausible under the panel's base rate. A base-rate-naive nunique==1
+        # test fires on small all-one-class runs that occur by chance (e.g. 11/11
+        # of a 70%-majority class: p=0.7^11≈0.02), wrongly dropping informative
+        # sparse columns. The true AF-missingness leak has n_missing in the
+        # hundreds, all one class -> chance≈0, so it is still caught.
         n_missing = int(vals.isna().sum())
         if n_missing > min_value_count:
             missing_mask = vals.isna()
-            if y[missing_mask].nunique() == 1:
-                if verbose:
-                    print(f"    LEAKY (missingness): {col} — all {n_missing} missing "
-                          f"samples are class {y[missing_mask].iloc[0]}")
-                leaky.append(col)
-                continue
+            ym = y[missing_mask]
+            if ym.nunique() == 1:
+                cls = int(ym.iloc[0])
+                base = float((y == cls).mean())     # P(this class) in the panel
+                chance = base ** n_missing           # P(all missing are this class) under base rate
+                if chance < 1e-3:
+                    if verbose:
+                        print(f"    LEAKY (missingness): {col} — all {n_missing} missing "
+                              f"samples are class {cls} (chance={chance:.1e})")
+                    leaky.append(col)
+                    continue
 
         if is_cat:
             # Per-value P-rate scan

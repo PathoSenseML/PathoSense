@@ -58,8 +58,18 @@ def fast_mrmr(X_train, y_train, X_val, X_test, max_features=0):
     with np.errstate(invalid="ignore", divide="ignore"):
         C = np.abs(np.corrcoef(enc, rowvar=False))
     C[np.isnan(C)] = 0.0
-    selected = [int(np.argmax(mi))]
-    cand = [j for j in range(n_before) if j != selected[0]]
+    # Exclude zero-variance / constant candidates: corrcoef yields NaN for a
+    # constant column (zeroed above), so its redundancy reads as 0 and it can
+    # out-score genuinely-informative-but-correlated columns. Constants carry no
+    # signal (MI≈0); drop them up front so the greedy step never selects them.
+    # (Matches the reference mRMR, which skips them via pandas corrwith's NaN-skip.)
+    col_std = enc.std(axis=0)
+    valid = np.where(col_std > 1e-12)[0]
+    if len(valid) == 0:
+        valid = np.arange(n_before)
+    max_features = min(max_features, len(valid))
+    selected = [int(valid[int(np.argmax(mi[valid]))])]
+    cand = [int(j) for j in valid if j != selected[0]]
     while len(selected) < max_features and cand:
         red = C[np.ix_(cand, selected)].mean(axis=1)
         best = cand[int(np.argmax(mi[cand] - red))]
