@@ -55,6 +55,9 @@ def _xgb_model():
                          n_jobs=4, random_state=SEED)
 
 
+ADD_TABPFN_MEMBER = False   # reverted 2026-06-27 — TabPFN adds AUC but no robust deployed F1 (see below)
+
+
 def fit_general_blend(X_pp, y, lgb_oof_cal, spw, n_splits=5):
     """Fit RF + CatBoost + XGBoost on X_pp (the general own-model native-NaN matrix), produce
     inner-OOF calibrated probs, and return frozen artifacts + the blended OOF (avg of the LGBM-
@@ -89,13 +92,17 @@ def fit_general_blend(X_pp, y, lgb_oof_cal, spw, n_splits=5):
     art = {"rf_model": rf_final, "cat_model": cat_final, "xgb_model": xgb_final, "encoder": enc,
            "cat_feats": cat_feats, "cat_idx": cat_idx,
            "rf_platt": rf_platt, "cat_platt": cat_platt, "xgb_platt": xgb_platt, "tabpfn": None}
-    # OPTIONAL equal-weight TabPFN-v2.6 5th member (the only lift past the GBDT ceiling: +0.0025 AUC,
-    # ~+0.01 F1). Graceful fallback to the 4-tree blend if TabPFN is unavailable (no token/GPU/license).
-    from tabpfn_member import fit_tabpfn_member
-    tab_art, tab_oof_cal = fit_tabpfn_member(X_pp, y, cat_feats, n_splits)
-    if tab_art is not None:
-        members_oof.append(tab_oof_cal); art["tabpfn"] = tab_art
-        print("  + TabPFN-v2.6 member: 5-way EQUAL-weight blend (general only)")
+    # OPTIONAL TabPFN-v2.6 5th member — REVERTED to OFF by default (2026-06-27). A deployment-faithful
+    # held-out CV (analysis/exp_general_final_number.py + exp_general_capture.py) showed it adds +0.0017
+    # AUC but ZERO robust F1 at the deployed operating point (paired Δ −0.0016…+0.0011, <1σ, not seed-
+    # stable; F1-optimized weights collapse to equal) — not worth a gated TabPFN/GPU dependency + the
+    # batch-invariance compromise. Set ADD_TABPFN_MEMBER=True to re-enable. tabpfn_member.py is kept.
+    if ADD_TABPFN_MEMBER:
+        from tabpfn_member import fit_tabpfn_member
+        tab_art, tab_oof_cal = fit_tabpfn_member(X_pp, y, cat_feats, n_splits)
+        if tab_art is not None:
+            members_oof.append(tab_oof_cal); art["tabpfn"] = tab_art
+            print("  + TabPFN-v2.6 member: 5-way EQUAL-weight blend (general only)")
     blend_oof = np.mean(members_oof, axis=0)
     return art, blend_oof
 
