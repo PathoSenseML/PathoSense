@@ -45,6 +45,17 @@ from general_blend import _rf_repr, _cat_repr, _cat_model
 #   pah   1.0  single-LGBM scorer            -> F1* 0.549->0.660
 TRANSFER_PANELS = {"cftr": 1.0, "cancer": 0.5, "pah": 1.0}
 
+# Panels whose transfer scorer applies TARGET-RANK domain adaptation: re-rank the target's AL_ allele-
+# frequency features on the TARGET panel's OWN training distribution (fit_target_pop_grids) instead of
+# general's percentile grid — fixing the cross-panel AF covariate shift (same variant: AL corr ~0.017
+# general<->pah, because the organizers re-extracted AFs per panel). DEPLOYED for pah (2026-06-28):
+# definitive 4-fresh-seed / 500-fold confirm = +0.0043 F1* (+3.19σ pooled; per-seed +2.32/+2.70/+1.94σ
+# and one flat −0.40σ) — a principled, leakage-safe (grids fit on target-train only) and batch-invariant
+# win. The lone consistently-positive pah lever after population-features (leak), all 165 architecture×
+# blend cells, and TabPFN were rejected. (analysis/exp_pah_targetrank_confirm.py, pah_targetrank_confirm.csv,
+# analysis/exp_pah_targetrank_confirm.py.)
+TRANSFER_TARGETRANK = {"pah"}
+
 # Panels whose transfer scorer is a heterogeneous BLEND (LGBM+RF+CatBoost, prob-avg).
 # Validated to beat the single-LGBM transfer scorer (analysis/exp_transfer_blend_validate.py):
 # cftr +0.039, cancer +0.012. pah is EXCLUDED — the blend hurts it (-0.012), so pah keeps the

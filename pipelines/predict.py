@@ -44,7 +44,8 @@ from utils import (detect_leaky_columns, optimize_threshold_f1,
 from models import (preprocess_data, get_model_params, train_multi_seed_ensemble)
 from recipe import PANEL_RECIPE
 from transfer import (TRANSFER_PANELS, fit_transfer_scorer, transfer_score,
-                      TRANSFER_FINETUNE, crossfit_finetuned_g, finetune_and_store)
+                      TRANSFER_FINETUNE, crossfit_finetuned_g, finetune_and_store,
+                      TRANSFER_TARGETRANK, fit_target_pop_grids)
 from general_blend import fit_general_blend, general_blend_probs
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -278,6 +279,9 @@ def train_and_save(panel_name):
     transfer = {}
     if w is not None:
         art = fit_transfer_scorer(panel_name)
+        # target-rank domain adaptation: fit AL_ rank grids on THIS panel's own training distribution
+        # (leakage-safe — train rows only; batch-invariant at inference). None for non-targrank panels.
+        tr_grids = fit_target_pop_grids(df, art) if panel_name in TRANSFER_TARGETRANK else None
         ft_cfg = TRANSFER_FINETUNE.get(panel_name)
         if ft_cfg:
             # panel fine-tune: CROSS-FIT OOF finetuned scores for honest Platt/threshold, then store the
@@ -287,12 +291,13 @@ def train_and_save(panel_name):
             print(f"  transfer scorer FINE-TUNED on {panel_name} (+{ft_cfg['K']} trees, w={ft_cfg['weights']}); "
                   f"OOF-finetuned AUC={roc_auc_score(y, g):.4f}")
         else:
-            g = transfer_score(df, art)             # OOS for this panel's rows
+            g = transfer_score(df, art, target_pop_grids=tr_grids)   # OOS for this panel's rows
             print(f"  transfer scorer: AUC on {panel_name}={roc_auc_score(y, g):.4f} "
-                  f"(trained on {art['n_train']} rows, excl {art['n_excluded']} ids)")
+                  f"(trained on {art['n_train']} rows, excl {art['n_excluded']} ids)"
+                  + ("  [target-rank AL]" if tr_grids else ""))
         platt_g = fit_platt(g, y.values)
         g_oof_cal = apply_platt(g, platt_g)
-        transfer = {"art": art, "platt": platt_g, "w": w}
+        transfer = {"art": art, "platt": platt_g, "w": w, "target_grids": tr_grids}
     else:
         g_oof_cal = None
 
@@ -364,7 +369,8 @@ def predict(input_csv, panel_name, output_csv):
     # transfer probabilities (if used)
     g_cal = None
     if art["transfer"]:
-        g = transfer_score(df, art["transfer"]["art"])
+        g = transfer_score(df, art["transfer"]["art"],
+                           target_pop_grids=art["transfer"].get("target_grids"))
         g_cal = apply_platt(g, art["transfer"]["platt"])
 
     if w is None:
