@@ -26,7 +26,10 @@ from calibration import fit_platt, apply_platt
 from harness import f1_at_prior, tpr_fpr, pick_threshold_at_prior
 
 PANEL = "general"; PRIOR = TEST_PRIORS[PANEL]
-CACHE = "/tmp/general_faithful_cache.npz"
+# NOT /tmp: that is a small tmpfs here, so the cache the canonical PDR table is built from
+# vanished on reboot and general became unreproducible. Survives reboots now.
+CACHE = os.environ.get("PATHOSENSE_CACHE",
+                       os.path.expanduser("~/.cache/pathosense/general_faithful_cache.npz"))
 NAMES = ["lgbm", "rf", "cat", "xgb", "tabpfn"]
 
 
@@ -69,11 +72,14 @@ def build():
                             (cb_o, cbf.predict_proba(Xte_cat)[:, 1]),
                             (xg_o, _xgb_model().fit(X_ord, ytr).predict_proba(Xte_ord)[:, 1])):
                 p = fit_platt(oof, yv); O.append(apply_platt(oof, p)); E.append(apply_platt(te, p))
-            # TabPFN (deployed member)
-            tab_art, tab_oof = fit_tabpfn_member(Xpp, ytr, cat_feats, n_splits=5)
-            O.append(tab_oof); E.append(tabpfn_member_probs(Xte, tab_art))
+            # TabPFN (optional 5th member; absent -> 4-tree cache, which is what the
+            # canonical PDR table uses anyway: exp_pdr_canonical.py takes E[:4])
+            if os.environ.get("TABPFN_TOKEN"):
+                tab_art, tab_oof = fit_tabpfn_member(Xpp, ytr, cat_feats, n_splits=5)
+                O.append(tab_oof); E.append(tabpfn_member_probs(Xte, tab_art))
             folds.append((np.array(O), np.array(E), yv, yte.values))
             print(f"  fold cached ({len(folds)})", flush=True)
+    os.makedirs(os.path.dirname(CACHE), exist_ok=True)
     np.savez(CACHE, **{f"O{i}": f[0] for i, f in enumerate(folds)}, **{f"E{i}": f[1] for i, f in enumerate(folds)},
              **{f"ytr{i}": f[2] for i, f in enumerate(folds)}, **{f"yte{i}": f[3] for i, f in enumerate(folds)}, n=len(folds))
     return folds
@@ -137,4 +143,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 1 and sys.argv[1] == "build":
+        build()          # cache only (4-tree unless TABPFN_TOKEN is set)
+    else:
+        main()

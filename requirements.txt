@@ -8,6 +8,7 @@ pandas==2.3.3
 scikit-learn==1.8.0
 lightgbm==4.6.0          # 4.x required: native categoricals + lgb.early_stopping callbacks
 catboost==1.2.10         # used by general_blend + the cftr/cancer blended transfer scorer
+xgboost==3.4.1           # general_blend 4th member + transfer scorer; unguarded top-level import
 scipy==1.17.1
 joblib==1.5.3
 matplotlib==3.10.9       # imported by run_pipeline (Agg backend) on the predict.py import path

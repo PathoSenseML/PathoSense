@@ -1,4 +1,4 @@
-"""STEP 0 — Headroom gate. Off the deployment-faithful 4-tree cache (/tmp/general_faithful_cache.npz).
+"""STEP 0 — Headroom gate. Off the deployment-faithful 4-tree cache (exp_general_capture.CACHE).
 Reports: base rate; realized F1 (4-tree @0.81); honest-recal F1 (threshold on train-OOF); PR-curve max-F1
 (best fold-peeking threshold @ prior); the headroom 0.537->PR-max with PAIRED SE; baseline AUC + AP.
 Decides whether the threshold is the bottleneck (it isn't if realized ~ honest-recal ~ near PR-max honestly).
@@ -11,7 +11,9 @@ from sklearn.metrics import roc_auc_score, average_precision_score
 from utils import TEST_PRIORS
 from harness import f1_at_prior, tpr_fpr, pick_threshold_at_prior
 
-PRIOR = TEST_PRIORS["general"]; CACHE = "/tmp/general_faithful_cache.npz"
+from exp_general_capture import CACHE
+
+PRIOR = TEST_PRIORS["general"]
 IDX4 = [0, 1, 2, 3]
 
 

@@ -1,4 +1,4 @@
-"""Instant analysis off the deployment-faithful member cache (/tmp/general_faithful_cache.npz):
+"""Instant analysis off the deployment-faithful member cache (exp_general_capture.CACHE):
 is the 5-member F1-weight win REAL vs the actually-DEPLOYED 4-tree@0.81 (not the weak @prior baseline)?
 Seed-stability + the optimized weight vector + a FIXED (mean-weight) deployable form.
 """
@@ -10,7 +10,9 @@ from scipy.optimize import minimize
 from utils import TEST_PRIORS
 from harness import f1_at_prior, tpr_fpr, pick_threshold_at_prior
 
-PRIOR = TEST_PRIORS["general"]; CACHE = "/tmp/general_faithful_cache.npz"
+from exp_general_capture import CACHE
+
+PRIOR = TEST_PRIORS["general"]
 NAMES = ["lgbm", "rf", "cat", "xgb", "tabpfn"]; IDX4 = [0, 1, 2, 3]; IDX5 = [0, 1, 2, 3, 4]
 
 
