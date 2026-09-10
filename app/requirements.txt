@@ -1,0 +1,5 @@
+# Presentation interface only. The scored pipeline stays on ../requirements.txt.
+#   uv pip install -r requirements.txt -r app/requirements.txt
+#   .venv/bin/python -m streamlit run app/app.py
+streamlit>=1.50
+streamlit-js-eval>=0.1.7    # viewport probe (app/app.py scales the layout to the browser window)

@@ -1,0 +1,31 @@
+# Theme for app/app.py (Streamlit reads this from the working directory).
+[theme]
+base = "light"
+# The brand teal, the same value as BRAND in app/app.py (tests/test_app.py keeps the two equal): it colours
+# the framework's own controls — slider, focus rings, filter chips — and is never a model call.
+primaryColor = "#0F6E66"
+backgroundColor = "#FFFFFF"
+# One ink and one second surface, the same values as SURF and INK in app/app.py (tests/test_app.py keeps
+# all three equal): the framework paints metric values and widget chrome with these, the app paints its own
+# tables and wells beside them, and two near-identical greys on one screen is one palette written twice.
+secondaryBackgroundColor = "#F8FAFC"
+textColor = "#223042"
+font = "sans serif"
+
+[browser]
+gatherUsageStats = false
+
+[server]
+runOnSave = true
+
+[runner]
+# Streamlit forces a full generation-2 gc.collect() after every script run. On this app's working set
+# (the artifacts, the scored batch, the SHAP frame) that collection takes 90-125 ms and holds the GIL,
+# so whatever is still in the send queue when it starts — the last elements of the page, the
+# contribution chart on Variant review, the results table on Predictions — reaches the browser a stage
+# after the rest and the page visibly assembles in two parts. Python's own cyclic collector still runs;
+# this only stops the forced full pass between the script and the frame the user is waiting for.
+postScriptGC = false
+
+[client]
+toolbarMode = "minimal"
