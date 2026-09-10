@@ -137,6 +137,32 @@ uv pip install -r requirements.txt
 `infer` writes `Variant_ID, prediction, probability`. Training is seeded and
 deterministic.
 
+### Interface
+
+`app/app.py` is a Streamlit workspace over the saved models, in Turkish (default)
+and English. **Overview** brings together canonical cross-validated results, the
+prevalence explorer, scoring flow and feature-family reference. **Predictions** scores
+a CSV and clearly separates batch/training-sample metrics from canonical results.
+**Variant review** audits a selected variant with LightGBM-member TreeSHAP contributions,
+reached by clicking a row of the results table or from the link in the Predictions toolbar.
+The source is implicit: with a file loaded the upload is scored, otherwise a fixed 300-row
+seed-42 sample of the panel; removing the file returns to that sample. Panel, uploaded file
+and shared filters persist across navigation. Remove the active file before replacing it.
+It never retrains; every probability it shows is the one `infer` writes.
+
+```bash
+uv pip install -r app/requirements.txt
+.venv/bin/python -m streamlit run app/app.py                     # Turkish
+PATHOSENSE_LANG=en .venv/bin/python -m streamlit run app/app.py  # English
+```
+
+The language is chosen when the interface starts and does not change while it runs.
+
+`pipelines/explain.py` holds the explainability logic and `tests/test_explain.py`
+checks it against the trained artifacts. After installing `app/requirements.txt`, run
+`.venv/bin/python tests/test_app.py` for interface state and input regression checks
+(requires local models and panel CSVs).
+
 ## Layout
 
 ```
@@ -146,6 +172,7 @@ pipelines/          the deployed system
   general_blend.py    RF + CatBoost + XGBoost blend for the general panel
   preprocess_v2.py    native-NaN preprocessing, AL_ family features, fast mRMR
   feature_engineering.py   BLOSUM62, Grantham, biochemical deltas, ACMG flags
+  explain.py          TreeSHAP contributions, readable feature names, confidence flags
   schema.py utils.py recipe.py calibration.py models.py config.py
   run_pipeline.py     the old single-split evaluation, kept for its shared helpers
 
@@ -155,7 +182,8 @@ analysis/
   explainability.py   SHAP and group permutation importance
   studies/            longer multi-script campaigns, grouped by topic
 
-tests/              batch-invariance regression test
+app/                Streamlit workspace: overview, predictions, variant review
+tests/              batch-invariance, explainability and interface regression tests
 docs/METHODS.md     methodology
 ```
 
