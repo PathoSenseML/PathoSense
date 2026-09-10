@@ -97,10 +97,13 @@ def _xgb_scorer():
 TRANSFER_FINETUNE = {}
 
 
-def _project_target(df_raw, art):
-    """Project raw target rows into the scorer's frozen model matrix Xs (mirror of transfer_score)."""
+def project_target(df_raw, art, target_pop_grids=None):
+    """Project raw target rows into the scorer's frozen model matrix Xs. Pure replay of the fitted
+    transforms (batch-invariant). target_pop_grids: see transfer_score."""
     df = engineer_aa_features(to_categorical(df_raw.copy()))
-    X = df.reindex(columns=art["raw_cols"]); Xs = apply_keep_nan(X, art["ppf"])
+    X = df.reindex(columns=art["raw_cols"])
+    ppf = art["ppf"] if target_pop_grids is None else {**art["ppf"], "pop_grids": target_pop_grids}
+    Xs = apply_keep_nan(X, ppf)
     if art["alf"] is not None:
         Xs = pd.concat([Xs.reset_index(drop=True), apply_al(X, art["alf"]).reset_index(drop=True)], axis=1)
         Xs = Xs.loc[:, ~Xs.columns.duplicated()]
@@ -111,6 +114,8 @@ def _project_target(df_raw, art):
     for col, cats in art["cat_cats"].items():
         Xs[col] = pd.Categorical(Xs[col].astype(object), categories=cats)
     return Xs
+
+_project_target = project_target   # back-compat name for the finetune helpers
 
 
 def _finetune_booster(base_booster, Xs, y, cfg, cat_feats):
@@ -332,21 +337,10 @@ def transfer_score(df_raw: pd.DataFrame, art: dict, target_pop_grids=None) -> np
     target_pop_grids (optional, from fit_target_pop_grids): override the general AF rank grids
     with target-distribution grids (domain adaptation for the AL_ covariate shift). Fit on
     target-train only -> still batch-invariant at inference."""
-    df = to_categorical(df_raw.copy())
-    df = engineer_aa_features(df)
-    X = df.reindex(columns=art["raw_cols"])
-    ppf = art["ppf"] if target_pop_grids is None else {**art["ppf"], "pop_grids": target_pop_grids}
-    Xs = apply_keep_nan(X, ppf)
-    if art["alf"] is not None:
-        Xs = pd.concat([Xs.reset_index(drop=True),
-                        apply_al(X, art["alf"]).reset_index(drop=True)], axis=1)
-        Xs = Xs.loc[:, ~Xs.columns.duplicated()]
-    for col in art["feats"]:
-        if col not in Xs.columns:
-            Xs[col] = np.nan
-    Xs = Xs[art["feats"]]
-    for col, cats in art["cat_cats"].items():
-        Xs[col] = pd.Categorical(Xs[col].astype(object), categories=cats)
+    return transfer_score_matrix(project_target(df_raw, art, target_pop_grids), art)
+
+def transfer_score_matrix(Xs: pd.DataFrame, art: dict) -> np.ndarray:
+    """Score an already-projected matrix (from project_target)."""
     ft = art.get("finetuned_booster")
     if ft is not None:                            # panel fine-tuned LGBM (cancer) replaces the base
         lgbm_p = ft.predict_proba(Xs)[:, 1]

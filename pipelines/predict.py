@@ -44,6 +44,7 @@ from utils import (detect_leaky_columns, optimize_threshold_f1,
 from models import (preprocess_data, get_model_params, train_multi_seed_ensemble)
 from recipe import PANEL_RECIPE
 from transfer import (TRANSFER_PANELS, fit_transfer_scorer, transfer_score,
+                      project_target, transfer_score_matrix,
                       TRANSFER_FINETUNE, crossfit_finetuned_g, finetune_and_store,
                       TRANSFER_TARGETRANK, fit_target_pop_grids)
 from general_blend import fit_general_blend, general_blend_probs
@@ -337,28 +338,28 @@ def train_and_save(panel_name):
 # Inference
 # ---------------------------------------------------------------------------
 
-def predict(input_csv, panel_name, output_csv):
+def load_artifacts(panel_name):
     art_path = os.path.join(MODELS_DIR, panel_name, "artifacts.joblib")
     if not os.path.exists(art_path):
-        print(f"ERROR: no model at {art_path}. Run: python predict.py train --panel {panel_name}")
-        sys.exit(1)
-    art = joblib.load(art_path)
-    cfg = art["recipe"]; w = art["transfer_w"]
-    print(f"  {panel_name.upper()}: transfer_w={w}, threshold={art['threshold']}")
+        raise FileNotFoundError(
+            f"no model at {art_path}. Run: python predict.py train --panel {panel_name}")
+    return joblib.load(art_path)
 
-    df = pd.read_csv(input_csv)
-    variant_ids = df["Variant_ID"].copy() if "Variant_ID" in df.columns else None
-    df = normalize_sentinels(df)
+def score_frame(df, art):
+    """Score a raw panel-style frame with the deployed artifacts. Returns a dict:
+    probs (blended, calibrated), own_probs / transfer_probs (calibrated member streams or None),
+    and the model matrices the LightGBM members saw (X_lgbm for the own model, Xs for the transfer
+    scorer) so callers can compute per-row feature contributions on exactly what was scored."""
+    cfg = art["recipe"]; w = art["transfer_w"]
+    df = normalize_sentinels(df.copy())
     if "Label" in df.columns:
         df = df.drop(columns=["Label"])
 
-    # own model probabilities (if used)
-    e_cal = None
+    e_cal = X_lgbm = None
     if art["own"]:
         df_eng = _engineer(df.copy(), cfg)
         avail = [c for c in art["feature_cols"] if c in df_eng.columns]
-        X = df_eng[avail].copy()
-        X_pp = _apply_own_preprocess(X, art["own"]["prep_art"])
+        X_pp = _apply_own_preprocess(df_eng[avail].copy(), art["own"]["prep_art"])
         keep = art["own"].get("lgbm_keep")        # per-member: LGBM on pruned cols, blend on full X_pp
         X_lgbm = X_pp[[c for c in keep if c in X_pp.columns]] if keep else X_pp
         e = np.mean([m.predict_proba(X_lgbm)[:, 1] for m in art["own"]["models"]], axis=0)
@@ -366,11 +367,11 @@ def predict(input_csv, panel_name, output_csv):
         if art["own"].get("blend") is not None:
             e_cal = general_blend_probs(X_pp, e_cal, art["own"]["blend"])
 
-    # transfer probabilities (if used)
-    g_cal = None
+    g_cal = Xs = None
     if art["transfer"]:
-        g = transfer_score(df, art["transfer"]["art"],
-                           target_pop_grids=art["transfer"].get("target_grids"))
+        Xs = project_target(df, art["transfer"]["art"],
+                            target_pop_grids=art["transfer"].get("target_grids"))
+        g = transfer_score_matrix(Xs, art["transfer"]["art"])
         g_cal = apply_platt(g, art["transfer"]["platt"])
 
     if w is None:
@@ -379,6 +380,19 @@ def predict(input_csv, panel_name, output_csv):
         probs = g_cal
     else:
         probs = w * g_cal + (1 - w) * e_cal
+    return {"probs": probs, "own_probs": e_cal, "transfer_probs": g_cal,
+            "X_lgbm": X_lgbm, "Xs": Xs}
+
+def predict(input_csv, panel_name, output_csv):
+    try:
+        art = load_artifacts(panel_name)
+    except FileNotFoundError as e:
+        print(f"ERROR: {e}"); sys.exit(1)
+    print(f"  {panel_name.upper()}: transfer_w={art['transfer_w']}, threshold={art['threshold']}")
+
+    df = pd.read_csv(input_csv)
+    variant_ids = df["Variant_ID"].copy() if "Variant_ID" in df.columns else None
+    probs = score_frame(df, art)["probs"]
     preds = (probs >= art["threshold"]).astype(int)
 
     out = {}
