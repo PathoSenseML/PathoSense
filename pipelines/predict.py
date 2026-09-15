@@ -17,10 +17,15 @@ out-of-sample general scores — matching the finals condition (novel target var
 Usage:
     python predict.py train --panel all
     python predict.py infer --panel cftr --input test.csv --output preds.csv
+    python predict.py submit --input test.csv --team-name "..." --team-id TEAM_101 \
+        --application-id BASVURU_101   # finals JSON (TEKNOFEST guide §3.2)
+    (--input also takes several files, e.g. one CSV per panel, merged into one JSON)
 """
 import os
 import sys
 import argparse
+import json
+import math
 import warnings
 import numpy as np
 import pandas as pd
@@ -343,7 +348,15 @@ def load_artifacts(panel_name):
     if not os.path.exists(art_path):
         raise FileNotFoundError(
             f"no model at {art_path}. Run: python predict.py train --panel {panel_name}")
-    return joblib.load(art_path)
+    art = joblib.load(art_path)
+    # Byte-identical replay (guide §6: the jury may re-run and must get the submitted JSON).
+    # RandomForest.predict_proba with n_jobs>1 sums tree votes in a thread-dependent order,
+    # which moves probabilities by ~1e-16 between runs — same classes, different bytes.
+    # Serial summation is deterministic; the fitted trees are untouched.
+    for blend in (art.get("own") or {}).get("blend"), ((art.get("transfer") or {}).get("art") or {}).get("blend"):
+        if blend and blend.get("rf_model") is not None:
+            blend["rf_model"].set_params(n_jobs=1)
+    return art
 
 def score_frame(df, art):
     """Score a raw panel-style frame with the deployed artifacts. Returns a dict:
@@ -404,6 +417,213 @@ def predict(input_csv, panel_name, output_csv):
     print(f"  {int(preds.sum())} Pathogenic / {len(preds)-int(preds.sum())} Benign -> {output_csv}")
     return pd.DataFrame(out)
 
+# --- Finals submission JSON (guide §3.2, university level) ---
+
+PANEL_KEYS = ("general", "cancer", "pah", "cftr")
+ID_CANDIDATES = ("id", "Variant_ID", "variant_id", "ID")
+# Organizer vocabulary (şartname §3: "MASTER, Kanser, CFTR, PAH"; training files
+# YARISMA_TRAIN_{MASTER,KANSER,PAH,CFTR}.csv). Accepted on input; emitted on output
+# whenever the test file carries no panel column of its own.
+PANEL_ALIASES = {"master": "general", "genel": "general", "general": "general",
+                 "kanser": "cancer", "cancer": "cancer", "pah": "pah", "cftr": "cftr"}
+PANEL_LABELS = {"general": "MASTER", "cancer": "KANSER", "pah": "PAH", "cftr": "CFTR"}
+
+
+def _panel_key(value):
+    k = PANEL_ALIASES.get(str(value).strip().lower())
+    if k is None:
+        raise ValueError(f"unknown panel value {value!r}; expected one of "
+                         f"{tuple(PANEL_ALIASES)} (case-insensitive)")
+    return k
+
+
+def build_submission(team_name, team_id, application_id, ids, panels, probs, preds,
+                     prob_mode="p1", with_probabilities=False):
+    """Assemble the guide §3.2 JSON. ids/panels must be verbatim text from the test file (ids are
+    never altered — §3). probs are P(class 1).
+
+    prob_mode: default "p1" ships P(class 1) — the guide says predicted_prob feeds AUROC-like
+    metrics, which need a monotone positive-class score, and its example (class "0", prob 0.87)
+    is exactly a high-threshold decision on P(1)=0.87, which the "own decision rule" note explains.
+    "predicted" = confidence in the predicted class, only if the sample check demands it.
+    with_probabilities (default False): the row set matches the §3.2 university template exactly
+    (id, panel, predicted_class, predicted_prob). True adds the {"0","1"} dict from the §3 common
+    rule ("probabilities alanı zorunludur"), whose scope is ambiguous — opt in only if the sample
+    validator demands it; predicted_prob then equals probabilities["1"].
+    """
+    rows = []
+    for vid, pnl, p, k in zip(ids, panels, probs, preds):
+        p = float(p)
+        cls = str(int(k))
+        rec = {"id": vid, "panel": pnl, "predicted_class": cls,
+               "predicted_prob": p if (prob_mode == "p1" or k == 1) else 1.0 - p}
+        if with_probabilities:
+            rec["probabilities"] = {"0": 1.0 - p, "1": p}
+        rows.append(rec)
+    return {"team_name": team_name, "team_id": team_id, "application_id": application_id,
+            "competition_level": "UNIVERSITE_VE_UZERI", "predictions": rows}
+
+
+def validate_submission(obj, ids):
+    """Enforce the guide's hard rules before writing; raises ValueError naming the offense."""
+    for key in ("team_name", "team_id", "application_id", "competition_level", "predictions"):
+        if key not in obj:
+            raise ValueError(f"submission missing required field: {key}")
+    if obj["competition_level"] != "UNIVERSITE_VE_UZERI":
+        raise ValueError(f"competition_level must be UNIVERSITE_VE_UZERI, got {obj['competition_level']!r}")
+    rows = obj["predictions"]
+    if len(rows) != len(ids):
+        raise ValueError(f"{len(rows)} prediction rows for {len(ids)} test examples (every id exactly once)")
+    seen = set()
+    for r in rows:
+        vid = r["id"]
+        if vid in seen:
+            raise ValueError(f"duplicate id in predictions: {vid!r}")
+        seen.add(vid)
+        q = r["predicted_prob"]
+        if not (isinstance(q, (int, float)) and math.isfinite(q) and 0.0 <= q <= 1.0):
+            raise ValueError(f"predicted_prob out of [0,1] for id {vid!r}: {q!r}")
+        if r["predicted_class"] not in ("0", "1"):
+            raise ValueError(f"predicted_class must be '0' or '1' for id {vid!r}: {r['predicted_class']!r}")
+        if "probabilities" in r:
+            pr = r["probabilities"]
+            if set(pr) < {"0", "1"} or not all(math.isfinite(v) and 0.0 <= v <= 1.0 for v in pr.values())\
+                    or abs(pr["0"] + pr["1"] - 1.0) > 0.001:
+                raise ValueError(f"probabilities must give finite '0'/'1' values summing to 1 (±0.001) for id {vid!r}")
+    missing = set(map(str, ids)) - seen
+    if missing:
+        raise ValueError(f"{len(missing)} test ids missing from predictions, e.g. {sorted(missing)[:3]}")
+
+
+def write_submission(obj, path):
+    # allow_nan=False makes json.dump raise on any NaN/Infinity — the guide's hard no.
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(obj, f, ensure_ascii=False, indent=2, allow_nan=False)
+    with open(path, encoding="utf-8") as f:   # re-read: what lands on the wire must parse
+        back = json.load(f)
+    if len(back["predictions"]) != len(obj["predictions"]):
+        raise ValueError(f"wrote {path} but it does not re-parse to the same row count")
+
+
+def _infer_panel_from_name(path):
+    """Guess the panel from the file name (training-style names like
+    YARISMA_TEST_KANSER.csv). Returns None when nothing matches."""
+    name = os.path.basename(str(path)).lower()
+    if "kanser" in name or "cancer" in name:
+        return "cancer"
+    if "cftr" in name:
+        return "cftr"
+    if "pah" in name:
+        return "pah"
+    if "master" in name or "general" in name or "genel" in name:
+        return "general"
+    return None
+
+
+def _split_panel_assignment(spec):
+    """'panel=path' → (panel, path); a plain path → (None, path). A '=' inside
+    a real path is safe: the left side must be a valid panel name to count."""
+    if "=" in spec:
+        maybe_panel, _, maybe_path = spec.partition("=")
+        try:
+            return _panel_key(maybe_panel), maybe_path
+        except ValueError:
+            pass
+    return None, spec
+
+
+def _panel_keys(raw, fallback, source):
+    """Per-row panel keys for one input file. A present panel column always wins;
+    the fallback covers files without one (e.g. one CSV per panel, like training)."""
+    if "panel" in raw.columns:
+        if raw["panel"].isna().any():
+            raise ValueError(f"{source}: missing panel value at row(s) "
+                             f"{list(raw.index[raw['panel'].isna()])[:5]}")
+        return raw["panel"].map(_panel_key)
+    if fallback:
+        return pd.Series([fallback] * len(raw), index=raw.index).map(_panel_key)
+    raise ValueError(f"{source}: no panel column; pass --panel <general|cancer|pah|cftr>")
+
+
+def submit(input_csv, team_name, team_id, application_id, output=None, panel=None,
+           id_col=None, prob_mode="p1", with_probabilities=False):
+    """input_csv: one test CSV or a list of them (e.g. one file per panel). panel:
+    fallback panel name, or a list aligned with input_csv for files without a
+    panel column. All files are merged into ONE guide-§3.2 JSON."""
+    inputs = [input_csv] if isinstance(input_csv, (str, os.PathLike)) else list(input_csv)
+    assigned, paths = zip(*[_split_panel_assignment(s) for s in inputs])
+    if panel is None:
+        fallbacks = [None] * len(paths)
+    elif isinstance(panel, str):
+        fallbacks = [panel] * len(paths)
+    else:
+        fallbacks = list(panel)
+        if len(fallbacks) != len(paths):
+            raise ValueError(f"{len(paths)} input files but {len(fallbacks)} --panel values "
+                             "(pass one panel per file, in order, or a single panel)")
+    for p, a in zip(fallbacks, assigned):
+        if p is not None and a is not None and _panel_key(p) != a:
+            raise ValueError(f"conflicting panels for one file: --panel {p} vs "
+                             f"panel={a} assignment (pick one)")
+    inputs = paths
+
+    all_ids, all_panels, all_probs, all_preds = [], [], [], []
+    for path, fallback, assign in zip(inputs, fallbacks, assigned):
+        effective = fallback or assign or _infer_panel_from_name(path)
+        raw = pd.read_csv(path, dtype=str)      # verbatim text for id/panel
+        df = pd.read_csv(path)                  # real dtypes for scoring
+
+        col = id_col or next((c for c in ID_CANDIDATES if c in raw.columns), None)
+        if col is None or col not in raw.columns:
+            raise ValueError(f"{path}: no id column found (tried {ID_CANDIDATES}); pass --id-col")
+        if raw[col].isna().any():
+            raise ValueError(f"{path}: empty id at row(s) {list(raw.index[raw[col].isna()])[:5]}")
+        ids = raw[col]
+        if ids.duplicated().any():
+            raise ValueError(f"{path}: duplicate ids in test file: "
+                             f"{ids[ids.duplicated()].iloc[:3].tolist()}")
+
+        keys = _panel_keys(raw, effective, path)
+        # A panel column is echoed verbatim (the organizers' own text wins). Otherwise we
+        # must name the panel ourselves, so use THEIR vocabulary, not our internal keys.
+        panels = raw["panel"] if "panel" in raw.columns \
+            else pd.Series([PANEL_LABELS[_panel_key(effective)]] * len(raw), index=raw.index)
+
+        probs = np.full(len(df), np.nan)
+        thresholds = np.full(len(df), np.nan)
+        for key in sorted(keys.unique()):
+            art = load_artifacts(key)   # FileNotFoundError carries its own train hint
+            mask = (keys == key).values
+            probs[mask] = np.asarray(score_frame(df.loc[mask], art)["probs"], dtype=float)
+            thresholds[mask] = art["threshold"]
+            print(f"  {key.upper()}: {int(mask.sum())} rows from {path}, "
+                  f"threshold={art['threshold']}")
+        if np.isnan(probs).any():
+            raise ValueError(f"{path}: model produced NaN probability for "
+                             f"{int(np.isnan(probs).sum())} row(s)")
+        preds = (probs >= thresholds).astype(int)
+        all_ids.append(ids)
+        all_panels.append(panels)
+        all_probs.append(probs)
+        all_preds.append(preds)
+
+    ids = pd.concat(all_ids, ignore_index=True)
+    panels = pd.concat(all_panels, ignore_index=True)
+    probs = np.concatenate(all_probs)
+    preds = np.concatenate(all_preds)
+
+    obj = build_submission(team_name, team_id, application_id, ids, panels, probs, preds,
+                           prob_mode=prob_mode, with_probabilities=with_probabilities)
+    validate_submission(obj, ids)
+    # guide §3 recommended name TEAM_<TAKIM_ID>_FINAL.json: team_id "TEAM_101" -> TEAM_101_FINAL.json
+    takim_id = team_id[5:] if team_id.upper().startswith("TEAM_") else team_id
+    out = output or f"TEAM_{takim_id}_FINAL.json"
+    write_submission(obj, out)
+    print(f"  {int(preds.sum())} Pathogenic / {len(preds) - int(preds.sum())} Benign "
+          f"({prob_mode} prob" + (" + probabilities dict" if with_probabilities else "") + ")")
+    print(f"  submission -> {out}")
+    return out
+
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -419,6 +639,30 @@ def main():
     p_infer.add_argument("--panel", required=True, choices=["general", "cancer", "pah", "cftr"])
     p_infer.add_argument("--input", required=True)
     p_infer.add_argument("--output", default="predictions.csv")
+    p_sub = sub.add_parser("submit", help="finals JSON per the TEKNOFEST guide §3.2")
+    p_sub.add_argument("--input", required=True, nargs="+",
+                       help="test CSV(s): one mixed-panel file, or one file per panel as "
+                       "panel=path pairs (e.g. --input general=g.csv cancer=k.csv ...), "
+                       "which needs no --panel and no ordering" )
+    p_sub.add_argument("--team-name", required=True, help="exactly as in KYS")
+    p_sub.add_argument("--team-id", required=True, help="e.g. TEAM_101")
+    p_sub.add_argument("--application-id", required=True, help="e.g. BASVURU_101")
+    p_sub.add_argument("--output", default=None,
+                       help="default: TEAM_<team-id>_FINAL.json")
+    p_sub.add_argument("--panel", choices=["general", "cancer", "pah", "cftr"], default=None,
+                       nargs="*", help="panel for files without a panel column (overrides the "
+                       "file-name guess): one value for all files, or one per file in "
+                       "--input order — keep the two orders aligned")
+    p_sub.add_argument("--id-col", default=None,
+                       help=f"id column name; default auto-detect {ID_CANDIDATES}")
+    p_sub.add_argument("--prob-mode", choices=["p1", "predicted"], default="p1",
+                       help="'p1' (default) = P(class 1), the monotone score AUROC/PR-AUC need — the "
+                            "guide's example (class '0', prob 0.87) is consistent with this under a "
+                            "high threshold, and its 'own decision rule' note explains the disagreement; "
+                            "'predicted' = confidence in the predicted class, if the sample check demands it")
+    p_sub.add_argument("--probabilities", action="store_true",
+                       help="add the {'0','1'} probabilities dict from the §3 common rules; off by "
+                            "default so rows match the §3.2 university template exactly")
     args = parser.parse_args()
 
     if args.command == "train":
@@ -428,6 +672,13 @@ def main():
             train_and_save(pn)
     elif args.command == "infer":
         predict(args.input, args.panel, args.output)
+    elif args.command == "submit":
+        try:
+            submit(args.input, args.team_name, args.team_id, args.application_id,
+                   output=args.output, panel=args.panel, id_col=args.id_col,
+                   prob_mode=args.prob_mode, with_probabilities=args.probabilities)
+        except (ValueError, FileNotFoundError) as e:
+            print(f"ERROR: {e}"); sys.exit(1)
 
 
 if __name__ == "__main__":
