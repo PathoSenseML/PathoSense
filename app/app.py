@@ -27,7 +27,7 @@ import warnings; warnings.filterwarnings("ignore")  # noqa: E702
 
 from predict import load_artifacts, score_frame                        # noqa: E402
 from explain import (explain_frame, top_contributions, feature_value, global_importance,   # noqa: E402
-                     family_importance, family_of, readable, verified_name, af_columns, confidence_flags,
+                     family_importance, family_of, readable, af_columns, confidence_flags,
                      f1_at_prior, fpr_for_f1, FAMILY_LABELS, FLAG_KEYS)
 from schema import normalize_sentinels, drop_all_nan_rows               # noqa: E402
 from utils import PANELS, TEST_PRIORS                                   # noqa: E402
@@ -103,8 +103,8 @@ TRUST_OK, TRUST_WARN, TRUST_FAIL = "#3F7A34", "#A87A00", RED
 # much for the word so that every agreement mark lands on one x — the column still reads straight down for
 # the model's mistakes — one word's length from the word instead of at the far edge of the column.
 TRUTH_W = {"tr": "4.375rem", "en": "5.125rem"}   # Patojenik 54.7px, Pathogenic 64.9px, measured at 13px root
-FAMILY_COLORS = {"conservation": "#E67E22", "allele_frequency": BLUE, "amino_acid": GREEN,
-                 "population_flags": "#8E44AD", "missingness": GREY, "other": FAINT}
+FAMILY_COLORS = {"ek": "#E67E22", "al": BLUE, "amino_acid": GREEN,
+                 "cat": "#8E44AD", "missingness": GREY, "other": FAINT}
 # Prevalence curves use the pooled cross-validated recall (TPR) and an FPR back-solved so that the curve
 # passes through the canonical F1 at the test prevalence: the canonical value is a mean of per-fold F1,
 # which the F1 of pooled confusion counts does not reproduce on the small panels (cftr 0.822 vs 0.851).
@@ -152,8 +152,8 @@ S = {
     # the two confirmed columns it leads with.
     "export_calls": "Predictions (0/1)", "export_cols": "Variant_ID · prediction 0/1 · probability · flag columns",
     "export_label": " · label",
-    "flag_cons_missing": "conservation missing", "flag_complex_aa": "non-standard AA code",
-    "flag_region_flag": "low-quality region", "flag_borderline": "borderline",
+    "flag_ek7_missing": "EK_7 missing", "flag_complex_aa": "non-standard AA code",
+    "flag_cat6_flag": "CAT_6 present", "flag_borderline": "borderline",
     # The trust key (truth_label). It names the tones in words because a tooltip is text the framework
     # renders and the app's marks are drawn; the legend under the table has no room for it (table_foot).
     "trust_key": "Check: the call matches the label. Cross: it does not."
@@ -172,11 +172,11 @@ S = {
 
     "bad_csv": 'The file could not be scored.',
     "low_coverage": "Feature coverage is only {pct}; these scores are not reliable.",
-    "not_observed": "no data", "missing": "missing", "yes": "yes", "no": "no",
+    "missing": "missing", "yes": "yes", "no": "no",
     "contrib_x": "Contribution (log-odds)", "fam_x": "Family total (log-odds)", "value": "Input value", "feature_id": "Feature ID",
-    "flagtext_cons_missing": "phyloP conservation is missing; on such rows discrimination fell from AUC 0.86 to 0.67 (general panel).",
+    "flagtext_ek7_missing": "EK_7 is missing; on such rows discrimination fell from AUC 0.86 to 0.67 (general panel).",
     "flagtext_complex_aa": "Multi-residue or non-standard amino-acid code: the substitution chemistry features are undefined.",
-    "flagtext_region_flag": "The site lies in a low-complexity, segmental-duplication or decoy region.",
+    "flagtext_cat6_flag": "The row carries a CAT_6 value; the model measurably loses discrimination on such rows.",
     "flagtext_borderline": "Within 0.05 of the threshold.",
     "global_fam": 'Feature families', "global_top": "Top 10 features (LightGBM gain)",
     "share": "Share", "family": "Family",
@@ -199,10 +199,10 @@ S = {
     "results_title": 'Cross-validated results',
     "chip_test_prior": 'at test prevalence',   # claim 6, drawn as the chip beside that heading
     "results_help": 'Binary F1, positive class pathogenic: 3 seeds, fold mean ± standard error, every step refitted inside every fold. Not a clinical validation.',
-    "g_conservation": "phyloP, phastCons, GERP++ conservation.",
-    "g_allele_frequency": "gnomAD, All of Us, TOPMed frequencies.",
+    "g_ek": "Anonymised EK_ columns and the features read off them.",
+    "g_al": "Anonymised AL_ columns and the features read off them.",
     "g_amino_acid": "Grantham, BLOSUM62; volume, charge, hydrophobicity differences.",
-    "g_population_flags": "gnomAD / All of Us popmax population, ancestral genotype, low-quality region.",
+    "g_cat": "Anonymised categorical CAT_ columns.",
     "g_missingness": "Indicators of unobserved input values.",
     "g_other": "Mean and spread of scaled features (score agreement).",
     "tab_overview": 'Overview',
@@ -226,7 +226,7 @@ S = {
     "training_batch": 'Every row here is training data for this model; batch metrics would not measure performance.',
     "training_batch_part": 'The panel’s own model — the {o} weighted share of the score — was fitted on these rows; batch metrics would not measure performance.',
     "transfer_caveat": 'The threshold and calibration{rank} were fitted on these rows, so F1 and MCC here are optimistic, not held-out validation.',
-    "transfer_rank": ' (and the AF rank transform)',
+    "transfer_rank": ' (and the AL_ rank transform)',
     "tag_label_ignored": 'Label column ignored',
     "label_ignored": 'Label values must be 0 or 1; this file has “{v}”.',
     "eval_title": 'Label comparison',
@@ -266,7 +266,7 @@ S = {
     "flow_chem": "Substitution chemistry",
     "flow_prep": "Preprocessing",
     "flow_models": "Models → calibrated score",
-    "flow_rank": "AF → rank",
+    "flow_rank": "AL_ → rank",
     "flow_clip": "EK_ → clip",
     "flow_missing": "NaN + flag",
     "flow_median": "NaN → median",
@@ -274,7 +274,7 @@ S = {
     "flow_interactions": "Interactions",
     "flow_agreement": "Score agreement",
     "flow_flags": "AL_ → present/absent",
-    "flow_target": "AF → in-panel rank",
+    "flow_target": "AL_ → in-panel rank",
     "flow_own": "Own",
     "flow_transfer": "Transfer",
     "flow_excluded": "IDs excluded",   # n_excluded counts IDs; flow_matched is the number of source rows they removed
@@ -326,8 +326,8 @@ S = {
     "pathogenic": "Patojenik", "benign": "Benign",
     "export_calls": "Tahminler (0/1)", "export_cols": "Variant_ID · tahmin 0/1 · olasılık · uyarı sütunları",
     "export_label": " · etiket",
-    "flag_cons_missing": "korunmuşluk eksik", "flag_complex_aa": "standart dışı AA kodu",
-    "flag_region_flag": "düşük kaliteli bölge", "flag_borderline": "sınırda",
+    "flag_ek7_missing": "EK_7 eksik", "flag_complex_aa": "standart dışı AA kodu",
+    "flag_cat6_flag": "CAT_6 dolu", "flag_borderline": "sınırda",
     # The trust key (truth_label). It names the tones in words because a tooltip is text the framework
     # renders and the app's marks are drawn; the legend under the table has no room for it (table_foot).
     "trust_key": "Onay: karar etiketle aynı. Çarpı: farklı."
@@ -348,11 +348,11 @@ S = {
 
     "bad_csv": 'Dosya skorlanamadı.',
     "low_coverage": "Özellik kapsamı yalnızca {pct}; skorlar güvenilir değil.",
-    "not_observed": "veri yok", "missing": "eksik", "yes": "evet", "no": "hayır",
+    "missing": "eksik", "yes": "evet", "no": "hayır",
     "contrib_x": "Katkı (log-odds)", "fam_x": "Aile toplamı (log-odds)", "value": "Girdi değeri", "feature_id": "Özellik kimliği",
-    "flagtext_cons_missing": "phyloP korunmuşluk skoru eksik; bu tür satırlarda ayırt etme gücü AUC 0.86'dan 0.67'ye düşmüştü (genel panel).",
+    "flagtext_ek7_missing": "EK_7 eksik; bu tür satırlarda ayırt etme gücü AUC 0.86'dan 0.67'ye düşmüştü (genel panel).",
     "flagtext_complex_aa": "Birden fazla kalıntı veya standart dışı amino asit kodu: değişim kimyası özellikleri tanımsız.",
-    "flagtext_region_flag": "Konum düşük karmaşıklıklı, segmental duplikasyon veya decoy bölgesinde.",
+    "flagtext_cat6_flag": "Bu satırda CAT_6 değeri var; model bu tür satırlarda ölçülebilir biçimde ayırt etme gücü kaybediyor.",
     "flagtext_borderline": "Karar eşiğine 0.05'ten az uzaklıkta.",
     "global_fam": 'Özellik aileleri', "global_top": "En etkili 10 özellik (LightGBM kazancı)",
     "share": "Pay", "family": "Aile",
@@ -375,10 +375,10 @@ S = {
     "results_title": 'Çapraz doğrulama sonuçları',
     "chip_test_prior": 'test prevalansında',   # claim 6, drawn as the chip beside that heading
     "results_help": "İkili F1, pozitif sınıf patojenik: 3 tohum, kat ortalaması ± standart hata; her adım her katta yeniden belirlenir. Klinik doğrulama değildir.",
-    "g_conservation": "phyloP, phastCons, GERP++ korunmuşluğu.",
-    "g_allele_frequency": "gnomAD, All of Us, TOPMed frekansları.",
+    "g_ek": "Anonimleştirilmiş EK_ sütunları ve bunlardan türetilen özellikler.",
+    "g_al": "Anonimleştirilmiş AL_ sütunları ve bunlardan türetilen özellikler.",
     "g_amino_acid": "Grantham, BLOSUM62; hacim, yük, hidrofobiklik farkları.",
-    "g_population_flags": "gnomAD ve All of Us en yüksek AF popülasyonu, atasal genotip, düşük kaliteli bölge.",
+    "g_cat": "Anonimleştirilmiş kategorik CAT_ sütunları.",
     "g_missingness": "Hangi girdilerin eksik olduğunu gösteren bayraklar.",
     "g_other": "Ölçeklenmiş özelliklerin ortalaması ve yayılımı (skor uyumu).",
     "tab_overview": 'Genel bakış',
@@ -402,7 +402,7 @@ S = {
     "training_batch": 'Buradaki satırların tamamı modelin eğitim verisi; küme metrikleri performans ölçmez.',
     "training_batch_part": 'Panelin kendi modeli — skorun {o} ağırlıklı payı — bu satırlar üzerinde eğitildi; küme metrikleri performans ölçmez.',
     "transfer_caveat": 'Eşik ve kalibrasyon{rank} bu satırlarda belirlendi; buradaki F1 ve MCC bu yüzden iyimserdir. Dış doğrulama değildir.',
-    "transfer_rank": ' (ve AF rank dönüşümü)',
+    "transfer_rank": ' (ve AL_ rank dönüşümü)',
     "tag_label_ignored": 'Label sütunu yok sayıldı',
     "label_ignored": 'Label değerleri 0 veya 1 olmalı; bu dosyada “{v}” var.',
     "eval_title": 'Etiket karşılaştırması',
@@ -442,7 +442,7 @@ S = {
     "flow_chem": "Değişim kimyası",
     "flow_prep": "Ön işleme",
     "flow_models": "Modeller → kalibre skor",
-    "flow_rank": "AF → rank",
+    "flow_rank": "AL_ → rank",
     "flow_clip": "EK_ → kırp",
     "flow_missing": "NaN + bayrak",
     "flow_median": "NaN → medyan",
@@ -450,7 +450,7 @@ S = {
     "flow_interactions": "Etkileşimler",
     "flow_agreement": "Skor uyumu",
     "flow_flags": "AL_ → var/yok",
-    "flow_target": "AF → panel içi rank",
+    "flow_target": "AL_ → panel içi rank",
     "flow_own": "Kendi",
     "flow_transfer": "Aktarım",
     "flow_excluded": "kimlik dışlandı",   # n_excluded counts IDs; flow_matched is the number of source rows they removed
@@ -529,7 +529,7 @@ def get_importance(panel: str) -> pd.Series:
 @st.cache_data(show_spinner=False)
 def training_rows(panel: str):
     """What predict.train_and_save fitted on: the panel CSV after drop_all_nan_rows (the raw file also carries
-    labelled rows with no features), and the strongest single raw conservation input on those rows. A single
+    labelled rows with no features), and the strongest single raw EK_ input on those rows. A single
     input has no fitted parameter, so its AUC on the training rows is the same number it would be out of sample."""
     if not os.path.exists(PANELS[panel]):
         return None
@@ -546,17 +546,9 @@ def training_rows(panel: str):
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────────────────────
-# gnomAD v4 / All of Us popmax codes (CAT_1, CAT_2 in the column dictionary; e = exomes, g = genomes).
-# Anything else — a bare code, an &-joined tie — is shown as it stands rather than guessed at.
-POP_SOURCE = {"gnomADe": ("gnomAD exomes", "gnomAD ekzom"), "gnomADg": ("gnomAD genomes", "gnomAD genom"),
-              "AllofUs": ("All of Us", "All of Us")}
-POP_NAME = {"AFR": ("African / African-American", "Afrikalı / Afrikalı-Amerikalı"), "AMI": ("Amish", "Amish"),
-            "AMR": ("Admixed American", "Karma Amerikalı"), "ASJ": ("Ashkenazi Jewish", "Aşkenaz Yahudisi"),
-            "EAS": ("East Asian", "Doğu Asyalı"), "EUR": ("European", "Avrupalı"), "FIN": ("Finnish", "Finlandiyalı"),
-            "MID": ("Middle Eastern", "Orta Doğulu"), "NFE": ("Non-Finnish European", "Finlandiyalı olmayan Avrupalı"),
-            "OTH": ("Other", "Diğer"), "REMAINING": ("Remaining individuals", "Kalan bireyler"),
-            "SAS": ("South Asian", "Güney Asyalı")}
-_POP_RE = re.compile(r"^(gnomADe|gnomADg|AllofUs)_([A-Z]+)$")
+# A categorical column's value is printed exactly as the file carries it. The codes inside CAT_1 / CAT_2
+# look like database and cohort codes, but the organizers do not say what they are, so the app does not
+# expand them into names it cannot stand behind.
 
 _FLAG_PREFIXES = ("ALfam_", "AA_to_stop", "AA_is_", "AA_glycine_loss", "AA_proline_", "AA_cysteine_loss", "AA_same",
                   "AA_grantham_high", "AA_charge_flipped", "AA_blosum_", "acmg_ba1", "acmg_bs1", "acmg_conserved", "Q_t", "Q_h")
@@ -600,12 +592,6 @@ def call_name(pathogenic) -> str:
     return t("pathogenic") if pathogenic else t("benign")
 
 
-def short_input(feat: str) -> str:
-    """A column named beside a number, in the shortest form the dictionary confirms: phyloP, phastCons,
-    GERP++. A column the dictionary does not name keeps its id — an invented name would be worse."""
-    return (verified_name(feat, lang) or feat).split(" ")[0]
-
-
 def is_flag(feat: str, af_cols=None) -> bool:
     if feat.endswith("_missing") or feat.startswith(_FLAG_PREFIXES):
         return True
@@ -614,16 +600,14 @@ def is_flag(feat: str, af_cols=None) -> bool:
 
 def fmt_val(v, feat: str = "", af_cols=None) -> str:
     if v is None or (isinstance(v, float) and np.isnan(v)):
-        return t("not_observed") if feat.startswith("AL") else t("missing")
+        return t("missing")
     if is_flag(feat, af_cols) and float(v) in (0.0, 1.0):
         return t("yes") if float(v) == 1.0 else t("no")
     if isinstance(v, (int, np.integer)):
         return str(int(v))
     if isinstance(v, (float, np.floating)):
         return f"{v:.3g}" if abs(v) < 1e-3 or abs(v) >= 1e4 else f"{v:.3f}"   # fixed precision: 1.000 and 0.964 are the same column
-    m = _POP_RE.match(str(v))
-    i = 0 if lang == "en" else 1
-    return f"{POP_NAME[m[2]][i]} · {POP_SOURCE[m[1]][i]} ({v})" if m and m[2] in POP_NAME else str(v)
+    return str(v)
 
 
 def fmt_int(v, feat: str = "") -> str:
@@ -670,9 +654,9 @@ def flag_text(row: pd.Series) -> str:
 # (4,8.1)→(6.8,10.9)→(12,4.9) mitred, the cross (4.25,4.25)–(11.75,11.75) crossed — so a future weight is
 # the same two outlines recomputed at the new gap, not a redrawn shape.
 MARKS = {
-    "cons_missing": "<circle cx='8' cy='8' r='5.5'/><path d='M4.1 11.9 11.9 4.1'/>",
+    "ek7_missing": "<circle cx='8' cy='8' r='5.5'/><path d='M4.1 11.9 11.9 4.1'/>",
     "complex_aa": "<path d='M2.5 5.5h11m-2-2 2 2-2 2M13.5 10.5h-11m2-2-2 2 2 2'/>",
-    "region_flag": "<path d='M8 2.6 14.4 13.4H1.6Z'/>",
+    "cat6_flag": "<path d='M8 2.6 14.4 13.4H1.6Z'/>",
     "borderline": "<rect x='2.5' y='2.5' width='11' height='11' rx='0.5'/><path d='M8 2.5v11'/>",
     "info": "<circle cx='8' cy='8' r='6'/><path d='M8 7.4v4.2'/><path d='M8 4.8v0.01'/>",
     "yes": ("<path fill='black' fill-rule='evenodd' stroke='none' d='M5 0.5H11A4.5 4.5 0 0 1 15.5 5V11"
@@ -924,15 +908,16 @@ def family_chart(row, lang):
 def contrib_chart(row, top, raw_row, mat_row, lang, af_cols):
     """The chart for the already-ranked drivers `top`. Its legend is the family chart drawn above it
     (family_chart), not a Vega legend: Vega centres a top-oriented legend across the plot width, which
-    strands it in empty space. This chart is where a driver is named — its axis labels carry the column id
-    and its meaning, and the input list beside it keys the same features by id alone. The bar labels carry
-    the contribution; the feature's own value is usually missing here (a variant absent from a population
-    database is exactly why the column moved the score), so it stays in the list and the tooltip rather than
-    decorating every bar with "eksik"."""
+    strands it in empty space. This chart is where a driver is named — its axis labels carry the column id,
+    and what this project computed off that column where there is something to say; an organizer column
+    carries the id alone, because its meaning is not disclosed. The bar labels carry the contribution; the
+    feature's own value is often missing here (an unobserved input is exactly the kind of thing that moves
+    the score), so it stays in the list and the tooltip rather than decorating every bar with "eksik"."""
     rows = []
     for f, c in top.items():
         v = fmt_val(feature_value(f, raw_row, mat_row), f, af_cols)
-        rows.append(dict(feature=f, name=f"{f} · {readable(f, lang, af_cols)}", contrib=float(c), value=v,
+        name = readable(f, lang)
+        rows.append(dict(feature=f, name=f if name == f else f"{f} · {name}", contrib=float(c), value=v,
                          family=FAMILY_LABELS[lang][family_of(f)]))
     # The tail is the residual of every feature outside the ten bars, from any family — not the `other` family,
     # whose net the key now states beside it. It borrowed that family's word until then; one screen carrying
@@ -974,22 +959,25 @@ def contrib_chart(row, top, raw_row, mat_row, lang, af_cols):
 
 
 def top_feature_chart(imp: pd.Series, lang: str, k: int = 10):
-    """AL_ columns are named as allele frequencies: the AF-vs-flag split is a per-batch heuristic and there is no batch here."""
     top = imp.sort_values(ascending=False).head(k)
     fams = [family_of(f) for f in top.index]
     # The axis carries the column id alone. The contribution chart labels a feature "id · name" because it
     # stands by itself; here the name is the widest thing on the chart and the least of what it adds — the
-    # bar's colour and the family table beside it already say "allele frequency", ten times over for the AL_
-    # block, while the id is the only part no neighbour supplies. The name is a hover away and is what the
-    # tooltip leads with; the bars, which are the quantity this chart exists to show, get the width back.
+    # bar's colour and the family table beside it already say which block the column is from, ten times over
+    # for the AL_ block, while the id is the only part no neighbour supplies. The bars, which are the
+    # quantity this chart exists to show, get the width back.
     d = pd.DataFrame({"feature": top.index, "name": [readable(f, lang) for f in top.index], "share": top.values,
                       "family": [FAMILY_LABELS[lang][f] for f in fams], "color": [FAMILY_COLORS.get(f, GREY) for f in fams]})
+    # An organizer column's name is its id, which the axis already carries: the description line is in the
+    # tooltip only when some feature on the chart has something else to say.
+    tips = [alt.Tooltip("family:N", title=t("family")), alt.Tooltip("share:Q", title=t("share"), format=".2%")]
+    if (d["name"] != d["feature"]).any():
+        tips.insert(0, alt.Tooltip("name:N", title=t("description")))
     return styled(alt.Chart(d).mark_bar().encode(
         y=alt.Y("feature:N", sort="-x", title=None, axis=alt.Axis(labelOverlap=False, labelFlush=False)),
         x=alt.X("share:Q", title=t("share"), stack=None, scale=alt.Scale(domain=[0, float(top.max()) * 1.05]), axis=alt.Axis(format="%")),
         color=alt.Color("color:N", scale=None),
-        tooltip=[alt.Tooltip("name:N", title=t("description")), alt.Tooltip("family:N", title=t("family")),
-                 alt.Tooltip("share:Q", title=t("share"), format=".2%")],
+        tooltip=tips,
     ).properties(height=chart_rows(k, MIN_BAND)))
 
 
@@ -1047,9 +1035,10 @@ def batch_mask(res, y, filters):
 def option(key):
     """A filter option's word. The list mixes model calls with review flags, and the flags are already
     written under the table in lower case: one case for the whole list, or the lower-case items read as
-    sub-items of the one above them."""
+    sub-items of the one above them. A word that opens with a column id (EK_7, CAT_6) is left alone —
+    lower-casing an id makes it a different string, and the id is the only thing naming that flag."""
     word = t(key)
-    return word[:1].lower() + word[1:]
+    return word if word[1:2].isupper() else word[:1].lower() + word[1:]
 
 
 def active_filter():
@@ -1930,8 +1919,8 @@ st.html(f"""<style>
   [data-testid="stMetricValue"], .vh .vid {{font-size:var(--fs-lg); line-height:var(--lh-lg)}}
   .vh .vid {{font-weight:600; color:var(--ink)}}
   .tag {{color:#fff; border-radius:var(--r-sm); padding:0.125rem 0.5rem; font-weight:600}}
-  /* The key/value list sits in a column beside the contribution chart, and its value column is long (a
-     decoded population), so the two share a narrow gutter and wrap from the top. */
+  /* The key/value list sits in a column beside the contribution chart, and its value column can be long (a
+     categorical column's raw value), so the two share a narrow gutter and wrap from the top. */
   table.kv {{border-collapse:collapse}}
   table.kv td {{padding:0.125rem 0.75rem 0.125rem 0; vertical-align:top; color:var(--ink); border:0; font-variant-numeric:tabular-nums}}
   table.kv td:first-child {{color:var(--muted)}}
@@ -2854,7 +2843,7 @@ def render_explain():
         # A chemistry driver already read on the amino-acid row above is not listed a second time.
         inputs = [f for f in dict.fromkeys(["EK_7", "EK_6", "CAT_1"] + (list(ranked.index) if VW > NARROW else []))
                   if f not in {f for f, _ in chemistry}]
-        kv([(f if f in ranked.index else readable(f, lang, af),
+        kv([(f if f in ranked.index else readable(f, lang),
              fmt_val(feature_value(f, row_raw, row_mat), f, af)) for f in inputs])
         lbl(t("col_flags"))
         fired = [k for k in FLAG_KEYS if flags.iloc[pick][k]]
@@ -2890,7 +2879,7 @@ def render_overview():
                      # The single-input baseline is a measured number, not an annotation on one: a parameter-free
                      # comparison on the same rows is the cheapest evidence in the project, so it is set at the
                      # size of the AUC beside it and keeps only the muted colour that says which of the two is ours.
-                     f"{CANON[p]['AUC']:.3f}" + (f" <span class='base'>· {E(t('single_input'))} {E(short_input(fitted['best'][0]))} {fitted['best'][1]:.3f}</span>" if fitted and fitted["best"][0] else ""),
+                     f"{CANON[p]['AUC']:.3f}" + (f" <span class='base'>· {E(t('single_input'))} {E(fitted['best'][0])} {fitted['best'][1]:.3f}</span>" if fitted and fitted["best"][0] else ""),
                      f"{CANON[p]['MCC']:.3f}", f"{CANON[p]['PR']:.3f}"])
     html_table([t("op_panel"), t("prior_train"), t("prior_test"), t("threshold"), t("recall"), t("col_prec"), "F1 ± SE", "AUC", "MCC", "PR-AUC"],
                rows, marked=PANEL_ORDER.index(panel))

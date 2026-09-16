@@ -2,9 +2,13 @@
 
 Per-variant feature contributions come from LightGBM's native ``pred_contrib`` (TreeSHAP in
 log-odds space) on the gradient-boosting member(s) that scored the row, averaged over the seed
-ensemble and weighted by the panel's transfer/own blend weight. Readable names, feature
-families and per-variant confidence flags turn the anonymized column ids into something a
-clinician or a juror can read. Consumed by app/app.py and tests/test_explain.py.
+ensemble and weighted by the panel's transfer/own blend weight. Feature families, names for the
+features this project engineers, and per-variant confidence flags. Consumed by app/app.py and
+tests/test_explain.py.
+
+What the organizers' columns (AL_, EK_, CAT_) measure is not disclosed, so nothing here names
+one: they are grouped by prefix and shown by id. A feature this project computes is named by
+what it computes, in terms of the column ids it reads.
 
 Honesty note: the deployed probability for cftr/cancer/general is a blend of LightGBM with
 RF/CatBoost/XGBoost members. The contributions here describe the LightGBM member(s) only,
@@ -20,33 +24,25 @@ STD_AA = set("ACDEFGHIKLMNPQRSTVWY") | {"*"}
 
 # ── feature families ──────────────────────────────────────────────────────────
 FAMILY_LABELS = {
-    "en": {"conservation": "Evolutionary conservation",
-           "allele_frequency": "Population allele frequency",
+    "en": {"ek": "EK columns",
+           "al": "AL columns",
            "amino_acid": "Amino-acid substitution chemistry",
-           "population_flags": "Population and region flags",
+           "cat": "CAT columns",
            "missingness": "Missing-data pattern",
            "other": "Other"},
-    "tr": {"conservation": "Evrimsel korunmuşluk",
-           "allele_frequency": "Popülasyon alel frekansı",
+    "tr": {"ek": "EK sütunları",
+           "al": "AL sütunları",
            "amino_acid": "Amino asit değişiminin kimyası",
-           "population_flags": "Popülasyon ve bölge bayrakları",
+           "cat": "CAT sütunları",
            "missingness": "Eksik veri örüntüsü",
            "other": "Diğer"},
 }
 
+# Only features this project computes. An organizer column is absent by design: see the module
+# docstring — readable() falls through to the id for anything not listed here.
 _EXACT = {
     "en": {
-        "EK_1": "GERP++ neutral rate", "EK_2": "GERP++ rejected substitutions",
-        "EK_3": "phyloP (sparse alignment)", "EK_4": "phastCons (100-way or 17-way)",
-        "EK_5": "phastCons (17-way or 100-way)", "EK_6": "phastCons 470-way mammalian",
-        "EK_7": "phyloP 100-way vertebrate", "EK_8": "phyloP 17-way primate",
-        "EK_9": "phyloP 470-way mammalian",
         "AA_1": "Reference amino acid", "AA_2": "Alternate amino acid",
-        "CAT_1": "gnomAD population with highest AF",
-        "CAT_2": "All of Us population with highest AF",
-        "CAT_3": "Ancestral genotype annotation A", "CAT_4": "Ancestral genotype annotation B",
-        "CAT_5": "Ancestral genotype annotation C",
-        "CAT_6": "Low-quality genomic region flag (LCR / segdup / decoy)",
         "AA_blosum62": "BLOSUM62 substitution score", "AA_grantham": "Grantham distance",
         "AA_hydro_delta": "Change in hydrophobicity", "AA_polarity_delta": "Change in polarity",
         "AA_mw_delta": "Change in molecular weight", "AA_volume_delta": "Change in residue volume",
@@ -59,29 +55,21 @@ _EXACT = {
         "AA_grantham_high": "Large Grantham distance (≥ 100)", "AA_charge_flipped": "Charge flipped",
         "AA_blosum_abs": "|BLOSUM62|", "AA_blosum_neg_flag": "BLOSUM62 negative",
         "AA_blosum_zero_flag": "BLOSUM62 zero", "AA_blosum_pos_flag": "BLOSUM62 positive",
-        "FX_cons_x_disrupt": "Conservation × chemical disruption",
-        "FX_cons_x_conservative": "Conservation × conservative change",
+        "FX_cons_x_disrupt": "EK_7 × chemical disruption",
+        "FX_cons_x_conservative": "EK_7 × conservative change",
         "FX_score_agree_count": "Selected, scaled features above 0.5",
         "FX_score_agree_mean": "Mean of selected, scaled features",
         "FX_score_agree_std": "Spread of selected, scaled features",
-        "acmg_max_af": "Maximum observed allele frequency", "acmg_ba1": "ACMG BA1 (AF > 5%)",
-        "acmg_bs1": "ACMG BS1 (AF > 1%)", "acmg_phastcons": "Mean phastCons",
-        "acmg_conserved": "Conserved site (PP3-style)",
+        "acmg_max_af": "Highest AL_ value on the row", "acmg_ba1": "Highest AL_ value above 0.05",
+        "acmg_bs1": "Highest AL_ value above 0.01", "acmg_phastcons": "Mean of EK_4, EK_5, EK_6",
+        "acmg_conserved": "EK_7 or EK_2 above 2",
         "ALn_fams": "Number of missingness groups with data",
-        "Q_typical_path": "Conserved site + disruptive change", "Q_hypomorphic": "Conserved site + mild change",
-        "Q_tolerable": "Variable site + disruptive change", "Q_typical_benign": "Variable site + mild change",
+        "Q_typical_path": "High EK_7 + disruptive change", "Q_hypomorphic": "High EK_7 + mild change",
+        "Q_tolerable": "Low EK_7 + disruptive change", "Q_typical_benign": "Low EK_7 + mild change",
         "Q_biochem_composite": "Biochemical disruption composite",
     },
     "tr": {
-        "EK_1": "GERP++ nötr değişim hızı", "EK_2": "GERP++ reddedilen nükleotit değişimleri",
-        "EK_3": "phyloP (seyrek hizalama)", "EK_4": "phastCons (100 omurgalı / 17 primat ayrımı belirsiz)",
-        "EK_5": "phastCons (17 primat / 100 omurgalı ayrımı belirsiz)", "EK_6": "phastCons 470 memeli",
-        "EK_7": "phyloP 100 omurgalı", "EK_8": "phyloP 17 primat", "EK_9": "phyloP 470 memeli",
         "AA_1": "Referans amino asit", "AA_2": "Alternatif amino asit",
-        "CAT_1": "En yüksek AF’li gnomAD popülasyonu",
-        "CAT_2": "En yüksek AF’li All of Us popülasyonu",
-        "CAT_3": "Atasal genotip anotasyonu A", "CAT_4": "Atasal genotip anotasyonu B", "CAT_5": "Atasal genotip anotasyonu C",
-        "CAT_6": "Düşük kaliteli genom bölgesi bayrağı (LCR / segdup / decoy)",
         "AA_blosum62": "BLOSUM62 değişim skoru", "AA_grantham": "Grantham uzaklığı",
         "AA_hydro_delta": "Hidrofobiklik değişimi", "AA_polarity_delta": "Polarite değişimi",
         "AA_mw_delta": "Moleküler ağırlık değişimi", "AA_volume_delta": "Yan zincir hacmi değişimi",
@@ -94,32 +82,28 @@ _EXACT = {
         "AA_grantham_high": "Büyük Grantham uzaklığı (≥ 100)", "AA_charge_flipped": "Yük tersine döndü",
         "AA_blosum_abs": "|BLOSUM62|", "AA_blosum_neg_flag": "BLOSUM62 negatif",
         "AA_blosum_zero_flag": "BLOSUM62 sıfır", "AA_blosum_pos_flag": "BLOSUM62 pozitif",
-        "FX_cons_x_disrupt": "Korunmuşluk × kimyasal bozulma",
-        "FX_cons_x_conservative": "Korunmuşluk × konservatif amino asit değişimi",
+        "FX_cons_x_disrupt": "EK_7 × kimyasal bozulma",
+        "FX_cons_x_conservative": "EK_7 × konservatif amino asit değişimi",
         # One phrase for the trio, short enough that the longest of them still fits the
         # contribution chart's axis label beside its column id (it used to truncate).
         "FX_score_agree_count": "0.5 üzerindeki seçilmiş ölçeklenmiş özellik sayısı",
         "FX_score_agree_mean": "Seçilmiş ölçeklenmiş özellik ortalaması",
         "FX_score_agree_std": "Seçilmiş ölçeklenmiş özellik yayılımı",
-        "acmg_max_af": "Gözlenen en yüksek alel frekansı", "acmg_ba1": "ACMG BA1 (AF > %5)",
-        "acmg_bs1": "ACMG BS1 (AF > %1)", "acmg_phastcons": "Ortalama phastCons",
-        "acmg_conserved": "Korunmuş konum (PP3 benzeri)",
+        "acmg_max_af": "Satırdaki en yüksek AL_ değeri", "acmg_ba1": "En yüksek AL_ değeri 0,05 üzerinde",
+        "acmg_bs1": "En yüksek AL_ değeri 0,01 üzerinde", "acmg_phastcons": "EK_4, EK_5, EK_6 ortalaması",
+        "acmg_conserved": "EK_7 veya EK_2 değeri 2 üzerinde",
         "ALn_fams": "Veri içeren eksiklik grubu sayısı",
-        "Q_typical_path": "Korunmuş konum + yıkıcı değişim", "Q_hypomorphic": "Korunmuş konum + hafif değişim",
-        "Q_tolerable": "Değişken konum + yıkıcı değişim", "Q_typical_benign": "Değişken konum + hafif değişim",
+        "Q_typical_path": "Yüksek EK_7 + yıkıcı değişim", "Q_hypomorphic": "Yüksek EK_7 + hafif değişim",
+        "Q_tolerable": "Düşük EK_7 + yıkıcı değişim", "Q_typical_benign": "Düşük EK_7 + hafif değişim",
         "Q_biochem_composite": "Bileşik biyokimyasal bozulma skoru",
     },
 }
 
 _TEMPLATES = {
-    # The AL_ values are organizer-transformed, not real frequencies (analysis/column_identification): the name says so,
-    # because a value like 2.33e-14 is below any possible allele-count floor and a geneticist will notice.
-    "en": {"missing": "Missing: {base}", "af": "Transformed AF · population column {n}",
-           "al_flag": "Population flag column {n}", "alfam": "Missingness group {n} has data",
-           "cat": "Categorical column {n}", "ek": "Conservation score {n}", "aa": "Amino-acid feature {n}"},
-    "tr": {"missing": "Eksik: {base}", "af": "Dönüştürülmüş AF · popülasyon sütunu {n}",
-           "al_flag": "Popülasyon bayrak sütunu {n}", "alfam": "Eksiklik grubu {n}: veri var",
-           "cat": "Kategorik sütun {n}", "ek": "Korunmuşluk skoru {n}", "aa": "Amino asit özelliği {n}"},
+    # ALfam_ groups AL_ columns by their missingness pattern — a pattern this project measured in the data,
+    # not a property the organizers stated, so the name says missingness and nothing about the columns.
+    "en": {"missing": "Missing: {base}", "alfam": "Missingness group {n} has data"},
+    "tr": {"missing": "Eksik: {base}", "alfam": "Eksiklik grubu {n}: veri var"},
 }
 
 _AL_RE = re.compile(r"^AL_(\d+)$")
@@ -132,55 +116,39 @@ def family_of(feat: str) -> str:
     if feat.endswith("_missing"):
         return "missingness"
     if base.startswith("EK_") or base in ("acmg_phastcons", "acmg_conserved") or base.startswith("FX_cons"):
-        return "conservation"
+        return "ek"   # the EK_ columns and the features read off them
     if base.startswith("ALfam_") or base == "ALn_fams":   # AL_ missingness-pattern groups: their own names say missingness
         return "missingness"
     if base.startswith("AL") or base in ("acmg_max_af", "acmg_ba1", "acmg_bs1"):
-        return "allele_frequency"
+        return "al"
     if base.startswith("FX_score_agree"):   # an aggregate of AUC-selected numeric features, not substitution chemistry
         return "other"
     if base.startswith("AA_") or base.startswith("Q_") or base.startswith("FX_"):
         return "amino_acid"
     if base.startswith("CAT_"):
-        return "population_flags"
+        return "cat"
     return "other"
 
 
-def readable(feat: str, lang: str = "en", af_cols=None) -> str:
-    """Plain-language name for a model feature. ``af_cols`` (optional set) marks which AL_
-    columns are allele-frequency values (rank-transformed at training) as opposed to flags."""
+def readable(feat: str, lang: str = "en") -> str:
+    """Name for a feature this project computes. An organizer column (AL_, EK_, CAT_) is returned as its
+    own id: what it measures is not disclosed, and a caller that shows this beside a number must not put
+    a guess there."""
     ex, tp = _EXACT.get(lang, _EXACT["en"]), _TEMPLATES.get(lang, _TEMPLATES["en"])
     if feat.endswith("_missing"):
-        return tp["missing"].format(base=readable(feat[:-8], lang, af_cols))
+        return tp["missing"].format(base=readable(feat[:-8], lang))
     if feat in ex:
         return ex[feat]
-    m = _AL_RE.match(feat)
-    if m:
-        key = "af" if (af_cols is None or feat in af_cols) else "al_flag"
-        return tp[key].format(n=m.group(1))
     m = _ALFAM_RE.match(feat)
     if m:
         return tp["alfam"].format(n=m.group(1))
-    if feat.startswith("CAT_"):
-        return tp["cat"].format(n=feat[4:])
-    if feat.startswith("EK_"):
-        return tp["ek"].format(n=feat[3:])
-    if feat.startswith("AA_"):
-        return tp["aa"].format(n=feat[3:])
     return feat
 
 
-def verified_name(feat: str, lang: str = "en") -> str | None:
-    """The dictionary's confirmed name for a column, or None where there is none: a caller that needs a
-    name it can stand behind (a chart cell beside a number) falls back to the column id rather than to a
-    template that only restates the prefix."""
-    return _EXACT.get(lang, _EXACT["en"]).get(feat)
-
-
 def af_columns(df_raw: pd.DataFrame) -> set:
-    """AL_ columns that carry allele-frequency VALUES in this batch (anything not purely 0/1).
-    Heuristic from the batch itself: a column whose observed values are all 0/1 is labelled a
-    population flag. The exact population behind each column is unrecoverable (transformed)."""
+    """AL_ columns carrying something other than 0/1 in this batch. Observed from the batch itself and
+    used only to decide how a value is printed (a number, or yes/no); it says nothing about what the
+    column measures, which the organizers do not disclose."""
     out = set()
     for c in df_raw.columns:
         if not _AL_RE.match(str(c)):
@@ -229,9 +197,9 @@ def top_contributions(contribs_row: pd.Series, k: int = 12) -> pd.Series:
 
 
 def feature_value(feat: str, row_raw: pd.Series, row_matrix: pd.Series):
-    """Value to display next to a contribution: the raw input when the column exists in the
-    input row (conservation, categorical, amino acid, allele frequency), else the engineered /
-    transformed value from the model matrix."""
+    """Value to display next to a contribution: the raw input when the column exists in the input row
+    (any AL_, EK_, CAT_ or AA_ column of the file), else the engineered / transformed value from the
+    model matrix."""
     if feat in row_raw.index:
         return row_raw[feat]
     return row_matrix.get(feat, np.nan)
@@ -271,7 +239,7 @@ def family_importance(imp: pd.Series) -> pd.Series:
 
 # ── confidence flags ──────────────────────────────────────────────────────────
 
-FLAG_KEYS = ("cons_missing", "complex_aa", "region_flag", "borderline")
+FLAG_KEYS = ("ek7_missing", "complex_aa", "cat6_flag", "borderline")
 
 
 def confidence_flags(df_raw: pd.DataFrame, probs, threshold: float, margin: float = 0.05) -> pd.DataFrame:
@@ -285,8 +253,8 @@ def confidence_flags(df_raw: pd.DataFrame, probs, threshold: float, margin: floa
     complex_aa = ~(aa1.isin(STD_AA) & aa2.isin(STD_AA))
     region = df_raw["CAT_6"].notna() if "CAT_6" in df_raw else pd.Series(False, index=idx)
     border = pd.Series(np.abs(np.asarray(probs, dtype=float) - threshold) < margin, index=idx)
-    return pd.DataFrame({"cons_missing": ek7.values, "complex_aa": complex_aa.values,
-                         "region_flag": region.values, "borderline": border.values}, index=idx)
+    return pd.DataFrame({"ek7_missing": ek7.values, "complex_aa": complex_aa.values,
+                         "cat6_flag": region.values, "borderline": border.values}, index=idx)
 
 
 # ── operating point ───────────────────────────────────────────────────────────
@@ -312,17 +280,16 @@ def fpr_for_f1(tpr: float, prior: float, f1: float) -> float:
 
 if __name__ == "__main__":
     # self-check: naming, families, the analytic F1 and a contribution round-trip on a tiny model
-    assert family_of("EK_7") == "conservation" and family_of("AL_3_missing") == "missingness"
+    assert family_of("EK_7") == "ek" and family_of("AL_3_missing") == "missingness"
     assert family_of("ALfam_2") == "missingness" and family_of("ALn_fams") == "missingness"
-    assert family_of("AL_12") == "allele_frequency" and family_of("CAT_6") == "population_flags"
-    assert readable("EK_7") == "phyloP 100-way vertebrate"
-    assert readable("AL_12", af_cols={"AL_12"}) == "Transformed AF · population column 12"
-    assert verified_name("EK_7", "tr") == "phyloP 100 omurgalı" and verified_name("AL_12") is None
-    assert readable("AL_12", af_cols=set()) == "Population flag column 12"
-    assert readable("EK_6") == "phastCons 470-way mammalian"
+    assert family_of("AL_12") == "al" and family_of("CAT_6") == "cat"
+    # No organizer column carries a name in any language: the id is the name.
+    for _f in ("EK_7", "EK_6", "AL_12", "CAT_1", "CAT_6"):
+        assert readable(_f) == _f and readable(_f, "tr") == _f, _f
+    assert readable("AA_grantham") == "Grantham distance" and readable("ALfam_4").startswith("Missingness group 4")
     for tpr_, pi_, f1_ in [(0.8403, 0.167, 0.851), (0.8325, 0.286, 0.669), (0.7353, 0.143, 0.537)]:
         assert abs(f1_at_prior(tpr_, fpr_for_f1(tpr_, pi_, f1_), pi_)[2] - f1_) < 1e-9
-    assert readable("EK_7_missing", "tr") == "Eksik: phyloP 100 omurgalı"
+    assert readable("EK_7_missing", "tr") == "Eksik: EK_7"
     assert af_columns(pd.DataFrame({"AL_1": [1.0, 0.0, np.nan], "AL_2": [1e-5, 1.0, np.nan]})) == {"AL_2"}
     assert af_columns(pd.DataFrame({"AL_1": [1e-40, 1.0]})) == {"AL_1"}
     p, r, f = f1_at_prior(1.0, 0.0, 0.2); assert (p, r, f) == (1.0, 1.0, 1.0)
@@ -337,7 +304,7 @@ if __name__ == "__main__":
     logit = C.sum(axis=1).values + b
     assert np.allclose(1 / (1 + np.exp(-logit)), m.predict_proba(X)[:, 1], atol=1e-6)
     fl = confidence_flags(pd.DataFrame({"EK_7": [1.0, np.nan], "AA_1": ["A", "AG"], "AA_2": ["V", "S"],
-                                        "CAT_6": [None, "lcr"]}), [0.83, 0.2], 0.81)
-    assert fl["cons_missing"].tolist() == [False, True] and fl["complex_aa"].tolist() == [False, True]
-    assert fl["region_flag"].tolist() == [False, True] and fl["borderline"].tolist() == [True, False]
+                                        "CAT_6": [None, "x"]}), [0.83, 0.2], 0.81)
+    assert fl["ek7_missing"].tolist() == [False, True] and fl["complex_aa"].tolist() == [False, True]
+    assert fl["cat6_flag"].tolist() == [False, True] and fl["borderline"].tolist() == [True, False]
     print("explain.py self-check OK")

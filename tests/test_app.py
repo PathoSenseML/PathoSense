@@ -153,7 +153,7 @@ def test_overview_is_canonical_not_batch():
         assert round(2 * tpr * prec / (tpr + prec), 3) == f1, (tpr, prec, f1)
     # The best single input, in the AUC cell it is read against: a parameter-free baseline measured on the same
     # rows is evidence, so it is set at the size of the number beside it and only its colour stays muted.
-    assert "0.864 <span class='base'>· tek girdi phyloP 0.738</span>" in value    # named, not an id
+    assert "0.864 <span class='base'>· tek girdi EK_7 0.738</span>" in value    # the column's id: the app never names an anonymised column
     assert ".base {color:var(--muted)}" in value and "class='small'>· tek girdi" not in value
     # The results note is gone: the cross-validation claim is a tag on the heading, the rest is its tooltip.
     # Which metric it is follows the same rule: the table below draws an F1 column, so naming the metric a
@@ -179,17 +179,22 @@ def test_overview_is_canonical_not_batch():
     assert list(metrics(at)) == ["Duyarlılık", "Kesinlik", "F1"]
     assert not re.search(r"class='tablewrap[^']*' tabindex", value)  # non-scrollable reference tables are not tab stops (the ⓘ marks are)
     assert len(at.get("page_link")) == 0
-    labels = chart_text(at)  # without a batch the AF-vs-flag heuristic cannot run: AL_ columns are named as allele frequencies
-    assert "Dönüştürülmüş AF · popülasyon sütunu" in labels and "bayrak sütunu" not in labels
-    # The top-10 axis carries the column id alone, unlike the contribution chart's "id · name": the bar
-    # colour and the family table beside it already name the family, and on cancer the names took most of
-    # the chart's width from the bars. The name stays in the data, as the tooltip's first row.
+    # No anonymised column is named anywhere on this page: what AL_, EK_ and CAT_ measure is not disclosed,
+    # so the app prints the id and the family table beside the chart says only which block the id is from.
+    labels = chart_text(at)
+    assert not any(word in labels for word in ("AF", "frekans", "korunmuşluk", "popülasyon", "phyloP"))
+    assert "EK sütunları" in labels and "AL sütunları" in labels
+    # The top-10 axis carries the column id, unlike the contribution chart's "id · name": the bar colour and
+    # the family table beside it already name the family, and on cancer the names took most of the chart's
+    # width from the bars. Every top-10 feature here is an anonymised column, whose name IS its id, so the
+    # tooltip drops the description row rather than saying the axis label back.
     spec = json.loads(at.get("vega_lite_chart")[1].proto.spec)
     assert spec["encoding"]["y"]["field"] == "feature"
-    assert [tip["field"] for tip in spec["encoding"]["tooltip"]] == ["name", "family", "share"]
     ranked = chart_column(at, 1, "feature")
     assert len(ranked) == 10 and not any(" · " in f for f in ranked), ranked
-    assert "Dönüştürülmüş AF · popülasyon sütunu 26" in chart_column(at, 1, "name"), "the name is a hover away"
+    names = chart_column(at, 1, "name")
+    tips = [tip["field"] for tip in spec["encoding"]["tooltip"]]
+    assert tips == (["name", "family", "share"] if names != ranked else ["family", "share"]), (tips, names)
 
 
 def test_overview_charts_keep_the_reclaimed_height():
@@ -246,10 +251,10 @@ def test_flow_and_importance_note_are_derived_from_each_artifact():
                     assert f"data-weight='{w:.8f}'" in flow
                 assert "flow-excluded" in flow and "<s>" in flow
                 assert flow.count("class='flow-platt'") == 1  # AFTER the transfer blend, never per internal member
-                assert (("AF → panel içi rank" in flow or "AF → in-panel rank" in flow)
+                assert (("AL_ → panel içi rank" in flow or "AL_ → in-panel rank" in flow)
                         == bool(art["transfer"].get("target_grids")))
                 if not ta["ppf"]["pop_grids"]:
-                    assert "AF → rank" not in flow
+                    assert "AL_ → rank" not in flow
             if lang == "tr":   # the members note is the top-10 heading's tooltip now, never a paragraph under it
                 assert "<div class='small'>Yalnızca LightGBM" not in value
                 note = next(h for h in hints(at).split("\n") if h.startswith("Yalnızca LightGBM"))
@@ -656,9 +661,9 @@ def test_training_rows_get_no_aggregate_metrics():
                             "Correct, warned: 42 / 80": ("42", "yes", "warn", ""),
                             "Wrong, nothing warned: 23 / 220": ("23", "no", "bad", "lead"),
                             "Wrong, warned: 38 / 80": ("38", "no", "warn", ""),
-                            "conservation missing: 37 / 300": ("37", "cons_missing", "fl", ""),
+                            "EK_7 missing: 37 / 300": ("37", "ek7_missing", "fl", ""),
                             "non-standard AA code: 36 / 300": ("36", "complex_aa", "fl", ""),
-                            "low-quality region: 4 / 300": ("4", "region_flag", "fl", ""),
+                            "CAT_6 present: 4 / 300": ("4", "cat6_flag", "fl", ""),
                             "borderline: 40 / 300": ("40", "borderline", "fl", "")}
     # Four counts, so no single value line and no qualifier under the title: each figure states the rows it
     # is a count of, on the figure, which is what left both titles bare.
@@ -692,7 +697,7 @@ def test_training_rows_get_no_aggregate_metrics():
     assert "class='tm " not in text(blind) and not cards(blind)["Warning types"][1]
     assert all(f"/ 25</span>" in c for c in re.findall(r"<b>\d+<span class='base'>[^<]*</span>", text(blind)))
     assert all(re.fullmatch(r"[\w\- ]+: \d+ / 25", name) for name in verdicts(blind)), verdicts(blind)
-    assert {glyph for _, glyph, _, _ in verdicts(blind).values()} == {"cons_missing", "complex_aa", "region_flag", "borderline"}
+    assert {glyph for _, glyph, _, _ in verdicts(blind).values()} == {"ek7_missing", "complex_aa", "cat6_flag", "borderline"}
     assert "training data for this model" in hints(blind) and "cross-validated F1 is" not in text(blind)
     df.loc[df.index[:12], "Variant_ID"] = [f"new-{i}" for i in range(12)]
     at = upload(csv(df), lang="en")                                     # partly training rows: the metrics stay
@@ -718,7 +723,7 @@ def test_provenance_follows_the_artifact_not_the_panel_name():
         assert "Label comparison" in plain(at) and "not held-out" in chips(at), panel
         assert "unseen by the model" not in value, panel   # said once, by the heading's own tag
         assert "training data for this model" not in hint, panel
-        assert ("AF rank transform" in hint) == rank, panel
+        assert ("AL_ rank transform" in hint) == rank, panel
     at = run(page="predictions", panel_keep="cancer", lang="en")
     assert "Label comparison" not in text(at) and chips(at)[:2] == ["in-sample", "50% weight"]
     # Said once: the tag beside the heading is the visible half, and the share that was fitted on these rows
@@ -760,7 +765,9 @@ def test_the_wrong_call_filter_counts_its_rows_like_every_other_option():
     df = sample(); df["Variant_ID"] = [f"new-{i}" for i in range(len(df))]
     at = upload(csv(df), lang="en")                                      # unknown provenance: metrics, and the count
     assert any(o.startswith("wrong call · ") for o in at.multiselect[0].options)
-    assert all(o[:1] == o[:1].lower() for o in at.multiselect[0].options), at.multiselect[0].options
+    # One case for the list, except where the word opens with a column id: lower-casing EK_7 would name
+    # nothing, and the id is all the app is willing to say about that column.
+    assert all(o[:1] == o[:1].lower() or o[1:2].isupper() for o in at.multiselect[0].options), at.multiselect[0].options
 
 
 def test_claims_that_stop_a_misreading_stay_reachable():
@@ -811,17 +818,20 @@ def test_review_input_list_names_each_feature_once():
     long before the chart did. The three standard inputs stay, and a standard input that is also a driver
     is listed once. The chart names its bars, so the list keys a feature the chart draws by its column id
     alone: no feature name is printed twice on one screen. A feature the chart does not draw carries its
-    name in the list instead, because there is nothing beside it to cross-refer to."""
+    name in the list instead, because there is nothing beside it to cross-refer to — and an anonymised
+    column has no name to carry in either place, so both sides show the id."""
     for panel, lang in (("general", "en"), ("cancer", "tr")):   # cancer also draws member bars
         at = run(page="explain", panel_keep=panel, lang=lang)
         inputs = re.findall(r"<tr><td>(.*?)</td>", re.findall(r"<table class='kv'>(.*?)</table>", text(at), re.S)[-1])
         assert len(inputs) >= 9 and len(inputs) == len(set(inputs)), (panel, inputs)
-        bars = [label for label in chart_text(at).split("\n") if " · " in label]   # axis labels are "id · name"
-        drawn = {label.split(" · ", 1)[0] for label in bars}
-        named = {label.split(" · ", 1)[1] for label in bars}
+        labels = [label for label in chart_text(at).split("\n") if label]
+        drawn = {label.split(" · ", 1)[0] for label in labels}
+        named = {label.split(" · ", 1)[1] for label in labels if " · " in label}
         assert not set(inputs) & named, (panel, set(inputs) & named)   # no name printed twice on one screen
         assert len(set(inputs) & drawn) >= 7, (panel, inputs)          # the drivers are keyed by their id
-        assert "EK_7" in inputs, panel
+        assert "EK_7" in inputs and "EK_7" in drawn, panel
+        # An anonymised column is the bare id on both sides: no "id · name" label for AL_, EK_ or CAT_.
+        assert not any(re.match(r"(AL|EK|CAT)_\d+ · ", label) for label in labels), (panel, labels)
     picker = next(w for w in at.selectbox if w.key == "pick_w")
     visibility = picker.proto.label_visibility
     assert visibility.value == visibility.COLLAPSED and picker.label == "Varyant"   # collapsed, still named
@@ -838,7 +848,7 @@ def test_enrichments_land_in_existing_cells():
         assert f"{fitted} · {art['training_prior']:.1%}" in value, panel
         if art["transfer"]:
             assert fitted == art["transfer"]["art"]["n_excluded"], panel               # the count the flow already draws
-    assert re.search(r"0\.864 <span class='base'>· single input (?:phyloP|phastCons|GERP\+\+) 0\.7\d\d</span>", value)
+    assert re.search(r"0\.864 <span class='base'>· single input EK_\d 0\.7\d\d</span>", value)
     at = run(page="explain", panel_keep="cancer", lang="en")                      # AA_grantham is a driver here
     value = text(at)
     assert re.search(r"Amino-acid change</td><td><b>[A-Z] → [A-Z] · Grantham \d+ · BLOSUM62 -?\d+</b>", value), value
@@ -886,7 +896,7 @@ def test_the_batch_block_describes_the_file_not_the_scores():
     # tooltip — the mark is the name, and the legend under the table on this same screen spells it. Every
     # figure states the rows it is counted against, as the cards beside it do.
     fired = {glyph: int(count) for count, glyph, tone, _ in verdicts(labelled).values() if tone == "fl"}
-    assert set(fired) == {"cons_missing", "complex_aa", "region_flag", "borderline"}
+    assert set(fired) == {"ek7_missing", "complex_aa", "cat6_flag", "borderline"}
     assert all(re.fullmatch(r"[\w\- ]+: \d+ / 25", name) for name, v in verdicts(labelled).items() if v[2] == "fl")
     card = cards(labelled)["Warning types"][2]
     # What the figures cannot say is left in the marker, and only that: a row can raise several warnings, so
@@ -894,7 +904,7 @@ def test_the_batch_block_describes_the_file_not_the_scores():
     # card as marks and under the table as words.
     warned = int(re.search(r"(\d+) of \d+ rows raised at least one", card)[1])
     assert max(fired.values()) <= warned <= sum(fired.values()), (card, fired)
-    assert not any(name in card for name in ("conservation missing", "non-standard AA code", "low-quality region"))
+    assert not any(name in card for name in ("EK_7 missing", "non-standard AA code", "CAT_6 present"))
     # What the warnings amount to against the model's own mistakes is the card beside it, because that
     # number is the point of the row and not a footnote to this one.
     assert "wrong" not in card and "Wrong, nothing warned: 2 / 20" in verdicts(labelled)
@@ -971,7 +981,7 @@ def test_the_truth_sits_beside_the_score_and_the_row_names_its_substitution():
     # up at 16px, and at the 2.5 it shipped with the white was taking more of the chip than the tone was.
     assert all("A1 1 0 0 1 " in urls[k] for k in ("yes", "no")), "the knockout is 2px"
     assert not any("fill='black'" in urls[k]
-                   for k in ("cons_missing", "complex_aa", "region_flag", "borderline")), "flags stay hairline"
+                   for k in ("ek7_missing", "complex_aa", "cat6_flag", "borderline")), "flags stay hairline"
     # The cell is the widest class word plus one fixed gap, not the whole column: the marks still share one
     # x, close enough to the word to be read with it rather than with the review flags.
     assert ".truth {display:inline-flex; align-items:baseline; gap:0.375rem}" in labelled and ".truth .cls {min-width:" in labelled
@@ -1014,29 +1024,29 @@ def test_review_flags_are_symbols_under_one_legend():
     the legend under the table, which shares its line with the row count. Every mark is drawn by one call
     (flag_mark) into one fixed box, so the cell's mark and the legend's mark are the same mark and the four
     of them share a footprint and a baseline instead of sitting at four heights."""
-    at = run(page="predictions", filter_keep=("flag_cons_missing",), lang="en")
+    at = run(page="predictions", filter_keep=("flag_ek7_missing",), lang="en")
     value = text(at)
     # Four slots in the legend's order, so a mark is at the same x on every row: the two fired here draw
     # their glyphs, the two that did not leave their boxes empty (silent inside the role=img span).
     fl = lambda name: f"<span class='fl'><span class='mk mk-{name}'></span></span>" if name else "<span class='fl'></span>"
-    marks = fl("cons_missing") + fl("complex_aa") + fl("") + fl("")
-    names = "conservation missing, non-standard AA code"   # the cell's accessible name and its tooltip, one string
+    marks = fl("ek7_missing") + fl("complex_aa") + fl("") + fl("")
+    names = "EK_7 missing, non-standard AA code"   # the cell's accessible name and its tooltip, one string
     cell = f"<span class='fls' role='img' aria-label='{names}' data-tip='{names}'>{marks}</span>"
     assert f"<td>{cell}</td>" in value
     cells = re.findall(r"<span class='fls'[^>]*>(.*?)</span></td>", value)
     assert cells and all(c.count("<span class='fl'>") == 4 for c in cells)   # every flagged row: one slot per flag
     unflagged = text(run(page="predictions", lang="en"))
     assert "<td></td></tr>" in unflagged and fl("") * 4 not in unflagged
-    assert "<td>conservation missing" not in value            # the prose is gone from the cell
-    assert fl("cons_missing") + "conservation missing" in value   # ... and named once, in the legend
+    assert "<td>EK_7 missing" not in value            # the prose is gone from the cell
+    assert fl("ek7_missing") + "EK_7 missing" in value   # ... and named once, in the legend
     # Drawn, not typed: four paths in one stroke weight, and none of the codepoints they replaced.
-    assert all(f"mk-{k}" in value for k in ("cons_missing", "complex_aa", "region_flag", "borderline"))
+    assert all(f"mk-{k}" in value for k in ("ek7_missing", "complex_aa", "cat6_flag", "borderline"))
     assert not any(glyph in value for glyph in "∅⇄▲◫")
     assert ".fl {display:inline-block; width:16px; height:16px; vertical-align:middle" in value
     assert ".mk {display:inline-block; width:16px; height:16px; vertical-align:middle" in value
-    assert "<span class='count'>37 / 300 rows · Filter: conservation missing</span></div>" in value
+    assert "<span class='count'>37 / 300 rows · Filter: EK_7 missing</span></div>" in value
     assert "<div class='small'>37 / 300 rows" not in value            # the count moved under the table
-    assert text(run(page="predictions", filter_keep=("flag_cons_missing",))).count(marks) == value.count(marks)
+    assert text(run(page="predictions", filter_keep=("flag_ek7_missing",))).count(marks) == value.count(marks)
 
 
 def test_hover_is_one_tooltip_on_every_surface():
@@ -1072,7 +1082,7 @@ def test_review_family_totals_are_a_chart_and_the_steppers_join_the_picker():
     assert len(charts) == 3                                              # gauge, family totals, contributions
     family = pa.ipc.open_stream(charts[1].proto.datasets[0].data.data).read_all().to_pydict()
     assert {"family", "contrib", "color"} <= set(family) and 3 <= len(family["family"]) <= 6
-    assert "Evolutionary conservation" in family["family"] and all(round(v, 3) for v in family["contrib"])   # zero-net families are not drawn
+    assert "EK columns" in family["family"] and all(round(v, 3) for v in family["contrib"])   # zero-net families are not drawn
     spec = json.loads(charts[1].proto.spec)
     assert spec["height"] < json.loads(charts[2].proto.spec)["height"] / 2  # a small chart, not a second subject
     assert {b.key for b in at.button if b.key in ("pick_prev", "pick_next")} == {"pick_prev", "pick_next"}

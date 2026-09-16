@@ -10,6 +10,7 @@ probability: sigmoid(mean(logits)) != mean(sigmoid(logits)). Consequently these
 LightGBM explanations do not reconstruct the final calibrated blend probability.
 """
 import os
+import re
 import sys
 import traceback
 
@@ -19,7 +20,7 @@ import numpy as np
 import pandas as pd
 from scipy.special import expit
 
-from explain import (FLAG_KEYS, af_columns, confidence_flags, explain_frame,
+from explain import (FAMILY_LABELS, FLAG_KEYS, af_columns, confidence_flags, explain_frame,
                      f1_at_prior, family_importance, family_of, global_importance,
                      lgbm_contribs, readable)
 from predict import load_artifacts, score_frame
@@ -106,10 +107,13 @@ def check_panel(panel):
         assert abs(projected - analytic) < 1e-6, (projected, analytic)
     else:
         assert abs(projected - canonical) < 0.01, (projected, canonical)
-    af = af_columns(df)
+    af_columns(df)
     for feature in contribs.columns:
         for lang in ("en", "tr"):
-            assert readable(feature, lang, af).strip(), (feature, lang)
+            assert readable(feature, lang).strip(), (feature, lang)
+            # Nothing the organizers anonymised is given a meaning: an AL_ / EK_ / CAT_ column reads as its id.
+            if re.fullmatch(r"(AL|EK|CAT)_\d+", feature):
+                assert readable(feature, lang) == feature, (feature, lang)
     print(f"  {panel:7s} PASS  rows={len(df)} members={','.join(expected)} "
           f"max|seed round-trip|={worst:.2e} F1*={projected:.3f}")
 
@@ -121,23 +125,29 @@ def main():
                                "AL_2": [1e-5, 1.0, np.nan],
                                "AL_3": [1e-40, 1.0, np.nan]})
         assert af_columns(sample) == {"AL_2", "AL_3"}
-        print("  AF classification PASS (binary, fractional, sub-1e-12 values)")
+        print("  value-vs-flag classification PASS (binary, fractional, sub-1e-12 values)")
         # FX_score_agree_* aggregates AUC-selected numeric features; only the FX_cons_* pair is chemistry.
         for feature in ("FX_score_agree_count", "FX_score_agree_mean", "FX_score_agree_std"):
             assert family_of(feature) == "other", feature
             assert "scaled features" in readable(feature), feature
             assert "ölçeklenmiş özellik" in readable(feature, "tr"), feature
         assert family_of("FX_score_agree_mean_missing") == "missingness"
-        assert family_of("FX_cons_x_disrupt") == "conservation" and family_of("AA_grantham") == "amino_acid"
+        assert family_of("FX_cons_x_disrupt") == "ek" and family_of("AA_grantham") == "amino_acid"
         print("  score-agreement taxonomy PASS (other family, honest name in both languages)")
-        # The AL_ family flags are named as missingness patterns, so they are drawn in that family:
-        # one screen cannot say allele frequency in its legend and missingness in its label.
+        # The AL_ family flags mark a missingness pattern this project measured, so they are drawn in that
+        # family and named for it: one screen cannot say one thing in its legend and another in its label.
         for feature in ("ALfam_1040", "ALn_fams"):
             assert family_of(feature) == "missingness", feature
             assert "missingness" in readable(feature).lower(), feature
             assert "eksiklik" in readable(feature, "tr").lower(), feature
-        assert family_of("AL_327") == "allele_frequency" and family_of("AL_327_missing") == "missingness"
+        assert family_of("AL_327") == "al" and family_of("AL_327_missing") == "missingness"
         print("  AL_ family-flag taxonomy PASS (missingness, matching their own names)")
+        # The taxonomy groups the organizers' columns by prefix and says nothing about what they hold.
+        assert family_of("EK_7") == "ek" and family_of("CAT_1") == "cat"
+        for lang, labels in (("en", FAMILY_LABELS["en"]), ("tr", FAMILY_LABELS["tr"])):
+            for key in ("ek", "al", "cat"):
+                assert key.upper() in labels[key], (lang, key)
+        print("  anonymised-column taxonomy PASS (prefix groups, no claimed identity)")
     except Exception:
         traceback.print_exc()
         return 1
